@@ -6,6 +6,7 @@ import os
 import pickle
 import re
 import time
+import ast
 
 import numpy as np
 import pandas as pd
@@ -25,6 +26,13 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('Device', DEVICE)
 
 parser = argparse.ArgumentParser()
+
+parser.add_argument('--query', type=bool, default=False, help='specific query')
+parser.add_argument('--groupby_col', type=str, help='columns for group by')
+parser.add_argument('--agg_col', type=str, help='columns for aggregate result')
+parser.add_argument('--where_col', type=str, help='format example: [col1, col2, col3]')
+parser.add_argument('--where_ops', type=str, help='format example: [[<],[=],[>,<]]')
+parser.add_argument('--where_val', type=str, help='format example: [[10], [2], [1, 1000]]')
 
 parser.add_argument('--inference-opts',
                     action='store_true',
@@ -149,17 +157,20 @@ def InvertOrder(order):
     return inv_ordering
 
 
-def MakeTable():
-    assert args.dataset in ['dmv-tiny', 'dmv']
+def MakeTable(groupby_col, agg_col):
+    # assert args.dataset in ['dmv-tiny', 'dmv']
     if args.dataset == 'dmv-tiny':
         table = datasets.LoadDmv('dmv-tiny.csv')
     elif args.dataset == 'dmv':
         table = datasets.LoadDmv()
-
+    else:
+        table = datasets.LoadMyDataset(args.dataset)
     oracle_est = estimators_lib.Oracle(table)
+
+    real_result = estimators_lib.RealResult(table, groupby_col, agg_col)
     if args.run_bn:
-        return table, common.TableDataset(table), oracle_est
-    return table, None, oracle_est
+        return table, common.TableDataset(table), real_result
+    return table, None,  oracle_est, real_result
 
 
 def ErrorMetric(est_card, card):
@@ -182,9 +193,9 @@ def SampleTupleThenRandom(all_cols,
 
     if args.dataset in ['dmv', 'dmv-tiny']:
         # Giant hack for DMV.
-        vals[6] = vals[6].to_datetime64()
+        vals[5] = vals[5].to_datetime64()
 
-    idxs = rng.choice(len(all_cols), replace=False, size=num_filters)
+    idxs = rng.choice(len(all_cols)-2, replace=False, size=num_filters)
     cols = np.take(all_cols, idxs)
 
     # If dom size >= 10, okay to place a range filter.
@@ -208,7 +219,8 @@ def SampleTupleThenRandom(all_cols,
 
 def GenerateQuery(all_cols, rng, table, return_col_idx=False):
     """Generate a random query."""
-    num_filters = rng.randint(5, 12)
+    # num_filters = rng.randint(5, 10)
+    num_filters = 1
     cols, ops, vals = SampleTupleThenRandom(all_cols,
                                             num_filters,
                                             rng,
@@ -264,6 +276,11 @@ def ReportEsts(estimators):
         v = max(v, np.max(est.errs))
     return v
 
+def RunSingleQuery(est, real, where_col, where_ops, where_val):
+    # Actual.
+    real_result = real.Query(where_col, where_ops, where_val)
+    est_result = est.Query(where_col, where_ops, where_val)
+    return est_result, real_result
 
 def RunN(table,
          cols,
@@ -275,7 +292,7 @@ def RunN(table,
          oracle_cards=None,
          oracle_est=None):
     if rng is None:
-        rng = np.random.RandomState(1234)
+        rng = np.random.RandomState()
 
     last_time = None
     for i in range(num):
@@ -376,7 +393,7 @@ def RunNParallel(estimator_factory,
 
 
 def MakeBnEstimators():
-    table, train_data, oracle_est = MakeTable()
+    table, train_data, real_result = MakeTable()
     estimators = [
         estimators_lib.BayesianNetwork(train_data,
                                        args.bn_samples,
@@ -391,7 +408,7 @@ def MakeBnEstimators():
 
     for est in estimators:
         est.name = str(est)
-    return estimators, table, oracle_est
+    return estimators, table, real_result
 
 
 def MakeMade(scale, cols_to_train, seed, fixed_ordering=None):
@@ -475,8 +492,63 @@ def LoadOracleCardinalities():
         return df.values.reshape(-1)
     return None
 
+def inference(est, real):
+    return [est, real, abs(est-real)/real]
+
+def SaveResults(est, real, est_result, real_result):
+    t = time.strftime('%b-%d-%Y_%H%M', time.localtime())
+    path = './results/' + t + '-' + args.dataset
+    # print(est_result)
+    # print(real_result)
+    # print(est.query_dur_ms, real.query_dur_ms)
+    if len(est_result) == 3 and est_result[0] is not list:
+        data = {
+            'avg': inference(est_result[0], real_result[0]),
+            'count': inference(est_result[1], real_result[1]),
+            'sum': inference(est_result[2], real_result[2]),
+            'query_dur_ms': inference(est.query_dur_ms[0], real.query_dur_ms[0])
+        }
+        results = pd.DataFrame(data, index=['est', 'real', 'error'])
+    else:
+        data = {
+            'avg': [row[1] for row in est_result],
+            'count': [row[2] for row in est_result],
+            'sum': [row[3] for row in est_result],
+        }
+        est_df = pd.DataFrame(data, index=[row[0] for row in est_result])
+        data = {
+            'avg_real': [row[1] for row in real_result],
+            'count_real': [row[2] for row in real_result],
+            'sum_real': [row[3] for row in real_result],
+        }
+        real_df = pd.DataFrame(data, index=[row[0] for row in real_result])
+        results = pd.concat([est_df, real_df], axis=1)
+        avg_error = []
+        cnt_error = []
+        sum_error = []
+        for index, row in results.iterrows():
+            if not row.isnull().any():
+                avg_error.append(abs(row[0]-row[3])/row[3])
+                cnt_error.append(abs(row[1]-row[4])/row[4])
+                sum_error.append(abs(row[2]-row[5])/row[5])
+        print(np.mean(avg_error), np.mean(cnt_error), np.mean(sum_error))
+
+    results.to_csv(path)
 
 def Main():
+    if args.query:
+        if args.groupby_col is not None:
+            groupby_col = ast.literal_eval(args.groupby_col)
+        else:
+            groupby_col = None
+        agg_col = ast.literal_eval(args.agg_col)
+        if args.where_col is not None:
+            where_col = ast.literal_eval(args.where_col)
+            where_ops = ast.literal_eval(args.where_ops)
+            where_val = ast.literal_eval(args.where_val)
+        else:
+            where_col = where_ops = where_val = None
+
     all_ckpts = glob.glob('./models/{}'.format(args.glob))
     if args.blacklist:
         all_ckpts = [ckpt for ckpt in all_ckpts if args.blacklist not in ckpt]
@@ -487,7 +559,7 @@ def Main():
 
     if not args.run_bn:
         # OK to load tables now
-        table, train_data, oracle_est = MakeTable()
+        table, train_data, oracle_est, real = MakeTable(groupby_col, agg_col)
         cols_to_train = table.columns
 
     Ckpt = collections.namedtuple(
@@ -516,15 +588,15 @@ def Main():
                                     fixed_ordering=order,
                                     seed=seed)
         else:
-            if args.dataset in ['dmv-tiny', 'dmv']:
-                model = MakeMade(
-                    scale=args.fc_hiddens,
-                    cols_to_train=table.columns,
-                    seed=seed,
-                    fixed_ordering=order,
-                )
-            else:
-                assert False, args.dataset
+            # if args.dataset in ['dmv-tiny', 'dmv']:
+            model = MakeMade(
+                scale=args.fc_hiddens,
+                cols_to_train=table.columns,
+                seed=seed,
+                fixed_ordering=order,
+            )
+            # else:
+            #     assert False, args.dataset
 
         assert order is None or len(order) == model.nin, order
         ReportModel(model)
@@ -555,6 +627,8 @@ def Main():
             estimators_lib.ProgressiveSampling(c.loaded_model,
                                                table,
                                                args.psample,
+                                               groupby_col,
+                                               agg_col,
                                                device=DEVICE,
                                                shortcircuit=args.column_masking)
             for c in parsed_ckpts
@@ -585,20 +659,24 @@ def Main():
                 estimators_lib.MaxDiffHistogram(table, args.maxdiff_limit))
 
         # Other estimators can be appended as well.
+        where_col = [table.columns[i] for i in where_col]
+        if args.query:
+            est_result, real_result = RunSingleQuery(estimators[0], real, where_col, where_ops, where_val)
+        else:
+            if len(estimators):
+                RunN(table,
+                     cols_to_train,
+                     estimators,
+                     rng=np.random.RandomState(),
+                     num=args.num_queries,
+                     log_every=1,
+                     num_filters=None,
+                     oracle_cards=oracle_cards,
+                     oracle_est=oracle_est)
 
-        if len(estimators):
-            RunN(table,
-                 cols_to_train,
-                 estimators,
-                 rng=np.random.RandomState(1234),
-                 num=args.num_queries,
-                 log_every=1,
-                 num_filters=None,
-                 oracle_cards=oracle_cards,
-                 oracle_est=oracle_est)
-
-    SaveEstimators(args.err_csv, estimators)
-    print('...Done, result:', args.err_csv)
+    # SaveEstimators(args.err_csv, estimators)
+    # print('...Done, result:', args.err_csv)
+    SaveResults(est, real, est_result, real_result)
 
 
 if __name__ == '__main__':

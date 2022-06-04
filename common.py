@@ -243,7 +243,7 @@ class TableDataset(data.Dataset):
 
         print('Discretizing table...', end=' ')
         s = time.time()
-        # [cardianlity, num cols].
+        # [cardinality, num cols].
         self.tuples_np = np.stack(
             [self.Discretize(c) for c in self.table.Columns()], axis=1)
         self.tuples = torch.as_tensor(

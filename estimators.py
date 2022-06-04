@@ -1,10 +1,11 @@
 """A suite of cardinality estimators.
 
-In practicular, inference algorithms for autoregressive density estimators can
+In particular, inference algorithms for autoregressive density estimators can
 be found in 'ProgressiveSampling'.
 """
 import bisect
 import collections
+import copy
 import json
 import operator
 import time
@@ -130,6 +131,45 @@ def FillInUnqueriedColumns(table, columns, operators, vals):
 
     return cs, os, vs
 
+class RealResult(CardEst):
+    def __init__(self, table, groupby_col, agg_col):
+        super(RealResult, self).__init__()
+        self.table = table
+        self.groupby_col = groupby_col
+        self.agg_col = agg_col
+
+    def Query(self, columns, operators, vals):
+        self.OnStart()
+        df = self.table.data
+        # print(df)
+        for i in range(len(columns)):
+            ops = operators[i]
+            # print(type(vals[i]))
+            for j, op in enumerate(ops):
+                if op is not None:
+                    if op == '>':
+                        df = df[df.iloc[:, i] > vals[i][j]]
+                    elif op == '<':
+                        df = df[df.iloc[:, i] < vals[i][j]]
+                    elif op == '>=':
+                        df = df[df.iloc[:, i] >= vals[i][j]]
+                    elif op == '<=':
+                        df = df[df.iloc[:, i] <= vals[i][j]]
+                    elif op == '=':
+                        df = df[df.iloc[:, i] == vals[i][j]]
+
+        if self.groupby_col is not None:
+            groupby_df = df.groupby(self.groupby_col)[self.agg_col].agg(['mean', 'count', 'sum'])
+            values = groupby_df.reset_index().values.tolist()
+        else:
+            avg_real_value = df[self.agg_col].mean().values[0]
+            count_real_value = len(df)
+            sum_real_value = df[self.agg_col].sum().values[0]
+            values = [avg_real_value, count_real_value, sum_real_value]
+            print('values', values)
+        self.OnEnd()
+        return values
+
 
 class ProgressiveSampling(CardEst):
     """Progressive sampling."""
@@ -139,6 +179,8 @@ class ProgressiveSampling(CardEst):
             model,
             table,
             r,
+            groupby_col,
+            agg_col,
             device=None,
             seed=False,
             cardinality=None,
@@ -146,6 +188,8 @@ class ProgressiveSampling(CardEst):
     ):
         super(ProgressiveSampling, self).__init__()
         torch.set_grad_enabled(False)
+        self.groupby_col = groupby_col
+        self.agg_col = agg_col
         self.model = model
         self.table = table
         self.shortcircuit = shortcircuit
@@ -218,23 +262,37 @@ class ProgressiveSampling(CardEst):
 
         # Use the query to filter each column's domain.
         valid_i_list = [None] * ncols  # None means all valid.
+        # print(operators, vals)
         for i in range(ncols):
             natural_idx = ordering[i]
 
             # Column i.
-            op = operators[natural_idx]
-            if op is not None:
-                # There exists a filter.
-                valid_i = OPS[op](columns[natural_idx].all_distinct_values,
-                                  vals[natural_idx]).astype(np.float32,
-                                                            copy=False)
+            ops = operators[natural_idx]
+            # print('ops', ops)
+            valid_i = valid_i_list[natural_idx]
+            if ops is not None:
+                for j, op in enumerate(ops):
+                    if op is not None:
+                        # print(columns[natural_idx].all_distinct_values)
+                        # There exists a filter.
+                        valid = OPS[op](columns[natural_idx].all_distinct_values,
+                                          vals[natural_idx][j]).astype(np.float32,
+                                                                    copy=False)
+                        if valid_i is not None:
+                            # print('valid_i is not None')
+                            valid_i *= valid
+                        else:
+                            valid_i = valid
+                        # print(valid_i)
             else:
                 continue
 
             # This line triggers a host -> gpu copy, showing up as a
             # hotspot in cprofile.
             valid_i_list[i] = torch.as_tensor(valid_i, device=self.device)
-
+            # print(valid_i)
+            # print(valid_i_list)
+        # print('valid_i_list', valid_i_list)
         # Fill in wildcards, if enabled.
         if self.shortcircuit:
             for i in range(ncols):
@@ -257,7 +315,11 @@ class ProgressiveSampling(CardEst):
         # Actual progressive sampling.  Repeat:
         #   Sample next var from curr logits -> fill in next var
         #   Forward pass -> curr logits
-        for i in range(ncols):
+        if self.groupby_col is not None:
+            cnt = ncols - (len(self.groupby_col) + 1)
+        else:
+            cnt = ncols
+        for i in range(cnt):
             natural_idx = i if ordering is None else ordering[i]
 
             # If wildcard enabled, 'logits' wasn't assigned last iter.
@@ -268,6 +330,8 @@ class ProgressiveSampling(CardEst):
                 valid_i = valid_i_list[i]
                 if valid_i is not None:
                     probs_i *= valid_i
+                if i == len(valid_i_list) - 1:
+                    prob_last = probs_i
 
                 probs_i_summed = probs_i.sum(1)
 
@@ -353,14 +417,283 @@ class ProgressiveSampling(CardEst):
                     else:
                         logits = self.model.forward_with_encoded_input(inp)
 
+
         # Doing this convoluted scheme because m_p[0] is a scalar, and
-        # we want the corret shape to broadcast.
+        # we want the correct shape to broadcast.
+
+        if self.groupby_col is None:
+            p = masked_probs[1]
+            for ls in masked_probs[2:]:
+                p *= ls
+            p *= masked_probs[0]
+            total_row = len(self.table.data)
+            p_last = prob_last.mean(dim=0)
+            last_vals = np.nan_to_num(columns[-1].all_distinct_values)
+            avg_est_value = np.dot(p_last, last_vals)
+            count_est_value = total_row*p.mean().item()
+            sum_est_value = avg_est_value * count_est_value
+            return [avg_est_value, count_est_value, sum_est_value]
+        else:
+            results = []
+            valid_list = []
+            value_list = []
+            valid_list = self.generateValidList(columns, valid_i_list, len(columns) - len(self.groupby_col)-1, valid_list, value_list)
+            for valid_i_list, value in valid_list:
+                result = self.runModel(valid_i_list, len(self.groupby_col), masked_probs, operators, logits,
+                                              ordering, columns)
+                if result is not None and result[1] > 0.5:
+                    results.append(value + result)
+                # print(results)
+            return results
+
+    def generateValidList(self, columns, valid_i_list, i, valid_list, value_list):
+        # print('valid_i_list', valid_i_list)
+        if i < len(columns)-1:
+            for val in columns[i].all_distinct_values:
+                value_list = []
+                valid_i = np.equal(columns[i].all_distinct_values,
+                                   val).astype(np.float32, copy=False)
+                valid_i_list[i] = torch.as_tensor(valid_i, device=self.device)
+                value_list.append(val)
+                valid_list.extend(copy.deepcopy(self.generateValidList(columns, valid_i_list, i + 1, valid_list, value_list)))
+                # print('valid_list', valid_list)
+            return valid_list
+        else:
+            return [(valid_i_list, value_list)]
+
+
+    def runModel(self, valid_i_list, length, masked, operators, logits, ordering, columns):
+        # print(valid_i_list)
+        masked_probs = copy.deepcopy(masked)
+        inp = self.inp.zero_()
+
+        for i in range(len(columns)-length-1, len(columns)):
+            natural_idx = i
+            # If wildcard enabled, 'logits' wasn't assigned last iter.
+            if not self.shortcircuit or operators[natural_idx] is not None:
+                probs_i = torch.softmax(
+                    self.model.logits_for_col(natural_idx, logits), 1)
+
+                valid_i = valid_i_list[i]
+                if valid_i is not None:
+                    probs_i *= valid_i
+                if i == len(valid_i_list) - 1:
+                    prob_last = probs_i
+
+                probs_i_summed = probs_i.sum(1)
+
+                masked_probs.append(probs_i_summed)
+
+                # If some paths have vanished (~0 prob), assign some nonzero
+                # mass to the whole row so that multinomial() doesn't complain.
+                paths_vanished = (probs_i_summed <= 0).view(-1, 1)
+                probs_i = probs_i.masked_fill_(paths_vanished, 1.0)
+
+            if i < len(valid_i_list) - 1:
+                # Num samples to draw for column i.
+                if i != 0:
+                    num_i = 1
+                else:
+                    num_i = self.num_samples if self.num_samples else int(
+                        self.r * self.dom_sizes[natural_idx])
+
+                if self.shortcircuit and operators[natural_idx] is None:
+                    data_to_encode = None
+                else:
+                    samples_i = torch.multinomial(
+                        probs_i, num_samples=num_i,
+                        replacement=True)  # [bs, num_i]
+                    data_to_encode = samples_i.view(-1, 1)
+
+                # Encode input: i.e., put sampled vars into input buffer.
+                if data_to_encode is not None:  # Wildcards are encoded already.
+                    if not isinstance(self.model, transformer.Transformer):
+                        if natural_idx == 0:
+                            self.model.EncodeInput(
+                                data_to_encode,
+                                natural_col=0,
+                                out=inp[:, :self.model.
+                                    input_bins_encoded_cumsum[0]])
+                        else:
+                            l = self.model.input_bins_encoded_cumsum[natural_idx
+                                                                     - 1]
+                            r = self.model.input_bins_encoded_cumsum[
+                                natural_idx]
+                            self.model.EncodeInput(data_to_encode,
+                                                   natural_col=natural_idx,
+                                                   out=inp[:, l:r])
+
+                # Actual forward pass.
+                next_natural_idx = i + 1 if ordering is None else ordering[i +
+                                                                           1]
+                if self.shortcircuit and operators[next_natural_idx] is None:
+                    # If next variable in line is wildcard, then don't do
+                    # this forward pass.  Var 'logits' won't be accessed.
+                    continue
+
+                if hasattr(self.model, 'do_forward'):
+                    # With a specific ordering.
+                    logits = self.model.do_forward(inp, ordering)
+                else:
+                    if self.traced_fwd is not None:
+                        logits = self.traced_fwd(inp)
+                    else:
+                        logits = self.model.forward_with_encoded_input(inp)
         p = masked_probs[1]
         for ls in masked_probs[2:]:
             p *= ls
+
         p *= masked_probs[0]
 
-        return p.mean().item()
+        p_last = prob_last.mean(dim=0)
+        last_vals = np.nan_to_num(columns[-1].all_distinct_values)
+        avg_est_value = np.dot(p_last, last_vals)
+        count_est_value = len(self.table.data) * p.mean().item()
+        sum_est_value = avg_est_value * count_est_value
+        return [avg_est_value, count_est_value, sum_est_value]
+        # if count_est_value >= 0.5:
+        #     return [avg_est_value, count_est_value, sum_est_value]
+        # else:
+        #     return None
+
+        # false_positive = 0
+        # false_negative = 0
+        # est = 0
+        # for i, g in enumerate(columns[ncols - 2].all_distinct_values):
+        #     # groupby_count_est_value = count_est_value * prob_groupby.mean(dim=0)[i]
+        #     avg, cnt, sum = self.calculate_group(valid_i_list, ncols, columns, operators, g, ordering, num_samples, inp, total_row)
+        #     if cnt > 1:
+        #         found = False
+        #         for name, real_avg, real_cnt, real_sum in groupby_values:
+        #             if name == g:
+        #                 print(real_avg, real_cnt, real_sum)
+        #                 print(g, avg, np.ceil(cnt), sum)
+        #                 self.write_groupby_row(g,real_avg, avg,real_cnt, np.ceil(cnt),real_sum, sum)
+        #                 found = True
+        #                 est += 1
+        #                 break
+        #         if not found:
+        #             false_positive += 1
+        # false_negative = len(groupby_values) - est
+        # self.write_groupby_cnt_res(len(groupby_values), false_positive, false_negative)
+        #
+        # return p.mean().item()
+    #
+    # def calculate_group(self, valid_i_list, ncols, columns, operators, val, ordering, num_samples, inp, total_row):
+    #     idx = ncols-2
+    #     valid_i = np.equal(columns[idx].all_distinct_values,
+    #                       val).astype(np.float32,copy=False)
+    #     valid_i_list[ncols-2] = torch.as_tensor(valid_i, device=self.device)
+    #     masked_probs = []
+    #     logits = self.init_logits
+    #     for i in range(ncols):
+    #         natural_idx = i if ordering is None else ordering[i]
+    #
+    #         # If wildcard enabled, 'logits' wasn't assigned last iter.
+    #         if not self.shortcircuit or operators[natural_idx] is not None:
+    #             probs_i = torch.softmax(
+    #                 self.model.logits_for_col(natural_idx, logits), 1)
+    #
+    #             valid_i = valid_i_list[i]
+    #             if valid_i is not None:
+    #                 probs_i *= valid_i
+    #             if i == ncols - 1:
+    #                 prob_last = probs_i
+    #
+    #             probs_i_summed = probs_i.sum(1)
+    #
+    #             masked_probs.append(probs_i_summed)
+    #
+    #             # If some paths have vanished (~0 prob), assign some nonzero
+    #             # mass to the whole row so that multinomial() doesn't complain.
+    #             paths_vanished = (probs_i_summed <= 0).view(-1, 1)
+    #             probs_i = probs_i.masked_fill_(paths_vanished, 1.0)
+    #
+    #         if i < ncols - 1:
+    #             # Num samples to draw for column i.
+    #             if i != 0:
+    #                 num_i = 1
+    #             else:
+    #                 num_i = num_samples if num_samples else int(
+    #                     self.r * self.dom_sizes[natural_idx])
+    #
+    #             if self.shortcircuit and operators[natural_idx] is None:
+    #                 data_to_encode = None
+    #             else:
+    #                 samples_i = torch.multinomial(
+    #                     probs_i, num_samples=num_i,
+    #                     replacement=True)  # [bs, num_i]
+    #                 data_to_encode = samples_i.view(-1, 1)
+    #
+    #             # Encode input: i.e., put sampled vars into input buffer.
+    #             if data_to_encode is not None:  # Wildcards are encoded already.
+    #                 if not isinstance(self.model, transformer.Transformer):
+    #                     if natural_idx == 0:
+    #                         self.model.EncodeInput(
+    #                             data_to_encode,
+    #                             natural_col=0,
+    #                             out=inp[:, :self.model.
+    #                                 input_bins_encoded_cumsum[0]])
+    #                     else:
+    #                         l = self.model.input_bins_encoded_cumsum[natural_idx
+    #                                                                  - 1]
+    #                         r = self.model.input_bins_encoded_cumsum[
+    #                             natural_idx]
+    #                         self.model.EncodeInput(data_to_encode,
+    #                                                natural_col=natural_idx,
+    #                                                out=inp[:, l:r])
+    #
+    #             # Actual forward pass.
+    #             next_natural_idx = i + 1 if ordering is None else ordering[i +
+    #                                                                        1]
+    #             if self.shortcircuit and operators[next_natural_idx] is None:
+    #                 # If next variable in line is wildcard, then don't do
+    #                 # this forward pass.  Var 'logits' won't be accessed.
+    #                 continue
+    #
+    #             if hasattr(self.model, 'do_forward'):
+    #                 # With a specific ordering.
+    #                 logits = self.model.do_forward(inp, ordering)
+    #             else:
+    #                 if self.traced_fwd is not None:
+    #                     logits = self.traced_fwd(inp)
+    #                 else:
+    #                     logits = self.model.forward_with_encoded_input(inp)
+    #     p = masked_probs[1]
+    #     for ls in masked_probs[2:]:
+    #         p *= ls
+    #
+    #     p *= masked_probs[0]
+    #
+    #     p_last = prob_last.mean(dim=0)
+    #     last_vals = np.nan_to_num(columns[ncols - 1].all_distinct_values)
+    #     avg_est_value = np.dot(p_last.cpu(), last_vals)
+    #     count_est_value = total_row * p.mean().item()
+    #     sum_est_value = avg_est_value * count_est_value
+    #     return avg_est_value, count_est_value, sum_est_value
+    #
+    # def write_groupby_cnt_res(self, true_cnt, fp, fn):
+    #     import csv
+    #     with open('ss_results_groupby_cnt.csv', 'a', encoding='UTF8') as f:
+    #         writer = csv.writer(f)
+    #         writer.writerow([true_cnt, fp, fn])
+    # def write_groupby_row(self, g, r1, e1, r2, e2, r3, e3):
+    #     import csv
+    #     with open('ss_results_groupby.csv', 'a', encoding='UTF8') as f:
+    #         writer = csv.writer(f)
+    #         writer.writerow([g, r1, e1, r2, e2, r3, e3])
+    #
+    # def write_a_row(self, r1, e1, r2, e2, r3, e3):
+    #     import csv
+    #     with open('ss_results_sum.csv', 'a', encoding='UTF8') as f:
+    #         writer = csv.writer(f)
+    #         writer.writerow([r1, e1])
+    #     with open('ss_results_avg.csv', 'a', encoding='UTF8') as f:
+    #         writer = csv.writer(f)
+    #         writer.writerow([r2, e2])
+    #     with open('ss_results_count.csv', 'a', encoding='UTF8') as f:
+    #         writer = csv.writer(f)
+    #         writer.writerow([r3, e3])
 
     def Query(self, columns, operators, vals):
         # Massages queries into natural order.
@@ -394,7 +727,7 @@ class ProgressiveSampling(CardEst):
             if num_orderings == 1:
                 ordering = orderings[0]
                 self.OnStart()
-                p = self._sample_n(
+                res = self._sample_n(
                     self.num_samples,
                     ordering if isinstance(
                         self.model, transformer.Transformer) else inv_ordering,
@@ -403,8 +736,9 @@ class ProgressiveSampling(CardEst):
                     vals,
                     inp=inp_buf)
                 self.OnEnd()
-                return np.ceil(p * self.cardinality).astype(dtype=np.int32,
-                                                            copy=False)
+                return res
+                # return np.ceil(p * self.cardinality).astype(dtype=np.int32,
+                #                                             copy=False)
 
             # Num orderings > 1.
             ps = []
@@ -426,7 +760,7 @@ class SampleFromModel(CardEst):
         self.model = model
         self.table = table  # The table that MADE is trained on.
         self.num_samples_per_query = num_samples_per_query
-        self.device = device  #device to use for pytorch
+        self.device = device  # device to use for pytorch
 
         doms = [c.DistributionSize() for c in table.columns]
         # Right shift by 1; put 0 at head.
@@ -870,7 +1204,7 @@ class BayesianNetwork(CardEst):
                     if val == 0 and operators[col_id] == "<":
                         val += 1
                     elif val == self.max_val[col_id] and operators[
-                            col_id] == ">":
+                        col_id] == ">":
                         val -= 1
 
             def prob_match(distribution):
@@ -941,7 +1275,7 @@ class BayesianNetwork(CardEst):
                     if val == 0 and operators[col_id] == "<":
                         val += 1
                     elif val == self.max_val[col_id] and operators[
-                            col_id] == ">":
+                        col_id] == ">":
                         val -= 1
 
             def prob_match(distribution):
@@ -1096,9 +1430,9 @@ class MaxDiffHistogram(CardEst):
             start_next_partition = time.time()
             (split_partition_index, split_column_index, partition_boundaries,
              global_maxdiff) = self.next_partition_candidate(
-                 self.partitions, len(self.table.columns), self.table,
-                 min(self.num_new_partitions,
-                     self.limit - len(self.partitions) + 1), self.maxdiff)
+                self.partitions, len(self.table.columns), self.table,
+                min(self.num_new_partitions,
+                    self.limit - len(self.partitions) + 1), self.maxdiff)
             print('determining partition number ', len(self.partitions))
             if global_maxdiff == 0:
                 print('maxdiff already 0 before reaching bucket limit')
@@ -1111,7 +1445,7 @@ class MaxDiffHistogram(CardEst):
                 self.partition_to_maxdiff[p] = set()
                 self._compute_maxdiff(p)
             for d in self.partition_to_maxdiff[
-                    self.partitions[split_partition_index]]:
+                self.partitions[split_partition_index]]:
                 remove_set = set()
                 for cid in range(len(self.table.columns)):
                     remove_set.add(
@@ -1147,7 +1481,7 @@ class MaxDiffHistogram(CardEst):
                         partition.uniform_spreads.append([
                             list(
                                 set(self.table.columns[cid].data[
-                                    partition.data_points]))[0]
+                                        partition.data_points]))[0]
                         ])
                 else:
                     uniform_spread = None
@@ -1173,20 +1507,20 @@ class MaxDiffHistogram(CardEst):
         for cid in range(len(self.table.columns)):
             for pid, partition in enumerate(self.partitions):
                 if partition.boundaries[cid][0] not in self.column_bound_map[
-                        cid]['l']:
+                    cid]['l']:
                     self.column_bound_map[cid]['l'][partition.boundaries[cid]
-                                                    [0]] = [pid]
+                    [0]] = [pid]
                 else:
                     self.column_bound_map[cid]['l'][partition.boundaries[cid]
-                                                    [0]].append(pid)
+                    [0]].append(pid)
 
                 if partition.boundaries[cid][1] not in self.column_bound_map[
-                        cid]['u']:
+                    cid]['u']:
                     self.column_bound_map[cid]['u'][partition.boundaries[cid]
-                                                    [1]] = [pid]
+                    [1]] = [pid]
                 else:
                     self.column_bound_map[cid]['u'][partition.boundaries[cid]
-                                                    [1]].append(pid)
+                    [1]].append(pid)
 
                 self.column_bound_index[cid]['l'].append(
                     partition.boundaries[cid][0])
@@ -1246,7 +1580,7 @@ class MaxDiffHistogram(CardEst):
         # distribute data points to new partitions
         for rowid in partition.data_points:
             if not self.table.columns[
-                    partition_column_index].data.dtype == 'int64':
+                       partition_column_index].data.dtype == 'int64':
                 val = self.table_ds.tuples_np[rowid, partition_column_index]
             else:
                 val = self.table.columns[partition_column_index].data[rowid]
@@ -1313,7 +1647,7 @@ class MaxDiffHistogram(CardEst):
                            len(self.column_bound_index[cid]['u'])):
                 column_set_map[cid] = column_set_map[cid].union(
                     self.column_bound_map[cid]['u'][self.column_bound_index[cid]
-                                                    ['u'][i]])
+                    ['u'][i]])
         else:
             assert o == '=', o
             lower_bound_set = set()
@@ -1336,7 +1670,7 @@ class MaxDiffHistogram(CardEst):
                            len(self.column_bound_index[cid]['u'])):
                 upper_bound_set = upper_bound_set.union(
                     self.column_bound_map[cid]['u'][self.column_bound_index[cid]
-                                                    ['u'][i]])
+                    ['u'][i]])
             column_set_map[cid] = lower_bound_set.intersection(upper_bound_set)
 
     def _estimate_cardinality_per_partition(self, partition, columns, operators,
@@ -1359,10 +1693,10 @@ class MaxDiffHistogram(CardEst):
             elif o in ['>', '>=']:
                 if o == '>':
                     distinct_val_covered = distinct_val_covered * (
-                        len(spread) - bisect.bisect(spread, v))
+                            len(spread) - bisect.bisect(spread, v))
                 else:
                     distinct_val_covered = distinct_val_covered * (
-                        len(spread) - bisect.bisect_left(spread, v))
+                            len(spread) - bisect.bisect_left(spread, v))
             else:
                 assert o == '=', o
                 if not v in spread:
