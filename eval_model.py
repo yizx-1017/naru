@@ -541,7 +541,8 @@ def Main():
             groupby_col = ast.literal_eval(args.groupby_col)
         else:
             groupby_col = None
-        agg_col = ast.literal_eval(args.agg_col)
+
+        agg_col = args.agg_col
         if args.where_col is not None:
             where_col = ast.literal_eval(args.where_col)
             where_ops = ast.literal_eval(args.where_ops)
@@ -659,7 +660,9 @@ def Main():
                 estimators_lib.MaxDiffHistogram(table, args.maxdiff_limit))
 
         # Other estimators can be appended as well.
+        where_col = [table.ColumnIndex(i) for i in where_col]
         where_col = [table.columns[i] for i in where_col]
+        print('where_col', where_col)
         if args.query:
             est_result, real_result = RunSingleQuery(estimators[0], real, where_col, where_ops, where_val)
         else:

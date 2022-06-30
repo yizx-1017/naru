@@ -141,32 +141,30 @@ class RealResult(CardEst):
     def Query(self, columns, operators, vals):
         self.OnStart()
         df = self.table.data
-        # print(df)
-        for i in range(len(columns)):
+        for i, col in enumerate(columns):
             ops = operators[i]
-            # print(type(vals[i]))
+            col_name = col.name
             for j, op in enumerate(ops):
                 if op is not None:
                     if op == '>':
-                        df = df[df.iloc[:, i] > vals[i][j]]
+                        df = df[df[col_name] > vals[i][j]]
                     elif op == '<':
-                        df = df[df.iloc[:, i] < vals[i][j]]
+                        df = df[df[col_name] < vals[i][j]]
                     elif op == '>=':
-                        df = df[df.iloc[:, i] >= vals[i][j]]
+                        df = df[df[col_name] >= vals[i][j]]
                     elif op == '<=':
-                        df = df[df.iloc[:, i] <= vals[i][j]]
+                        df = df[df[col_name] <= vals[i][j]]
                     elif op == '=':
-                        df = df[df.iloc[:, i] == vals[i][j]]
+                        df = df[df[col_name] == vals[i][j]]
 
         if self.groupby_col is not None:
             groupby_df = df.groupby(self.groupby_col)[self.agg_col].agg(['mean', 'count', 'sum'])
             values = groupby_df.reset_index().values.tolist()
         else:
-            avg_real_value = df[self.agg_col].mean().values[0]
+            avg_real_value = df[self.agg_col].mean()
             count_real_value = len(df)
-            sum_real_value = df[self.agg_col].sum().values[0]
+            sum_real_value = df[self.agg_col].sum()
             values = [avg_real_value, count_real_value, sum_real_value]
-            print('values', values)
         self.OnEnd()
         return values
 
@@ -256,13 +254,14 @@ class ProgressiveSampling(CardEst):
                   inp=None):
         ncols = len(columns)
         logits = self.init_logits
+        select_col = self.table.ColumnIndex(self.agg_col)
         if inp is None:
             inp = self.inp[:num_samples]
         masked_probs = []
 
         # Use the query to filter each column's domain.
         valid_i_list = [None] * ncols  # None means all valid.
-        # print(operators, vals)
+
         for i in range(ncols):
             natural_idx = ordering[i]
 
@@ -273,26 +272,20 @@ class ProgressiveSampling(CardEst):
             if ops is not None:
                 for j, op in enumerate(ops):
                     if op is not None:
-                        # print(columns[natural_idx].all_distinct_values)
                         # There exists a filter.
                         valid = OPS[op](columns[natural_idx].all_distinct_values,
                                           vals[natural_idx][j]).astype(np.float32,
                                                                     copy=False)
                         if valid_i is not None:
-                            # print('valid_i is not None')
                             valid_i *= valid
                         else:
                             valid_i = valid
-                        # print(valid_i)
             else:
                 continue
 
             # This line triggers a host -> gpu copy, showing up as a
             # hotspot in cprofile.
             valid_i_list[i] = torch.as_tensor(valid_i, device=self.device)
-            # print(valid_i)
-            # print(valid_i_list)
-        # print('valid_i_list', valid_i_list)
         # Fill in wildcards, if enabled.
         if self.shortcircuit:
             for i in range(ncols):
@@ -315,160 +308,49 @@ class ProgressiveSampling(CardEst):
         # Actual progressive sampling.  Repeat:
         #   Sample next var from curr logits -> fill in next var
         #   Forward pass -> curr logits
-        if self.groupby_col is not None:
-            cnt = ncols - (len(self.groupby_col) + 1)
-        else:
-            cnt = ncols
-        for i in range(cnt):
-            natural_idx = i if ordering is None else ordering[i]
-
-            # If wildcard enabled, 'logits' wasn't assigned last iter.
-            if not self.shortcircuit or operators[natural_idx] is not None:
-                probs_i = torch.softmax(
-                    self.model.logits_for_col(natural_idx, logits), 1)
-
-                valid_i = valid_i_list[i]
-                if valid_i is not None:
-                    probs_i *= valid_i
-                if i == len(valid_i_list) - 1:
-                    prob_last = probs_i
-
-                probs_i_summed = probs_i.sum(1)
-
-                masked_probs.append(probs_i_summed)
-
-                # If some paths have vanished (~0 prob), assign some nonzero
-                # mass to the whole row so that multinomial() doesn't complain.
-                paths_vanished = (probs_i_summed <= 0).view(-1, 1)
-                probs_i = probs_i.masked_fill_(paths_vanished, 1.0)
-
-            if i < ncols - 1:
-                # Num samples to draw for column i.
-                if i != 0:
-                    num_i = 1
-                else:
-                    num_i = num_samples if num_samples else int(
-                        self.r * self.dom_sizes[natural_idx])
-
-                if self.shortcircuit and operators[natural_idx] is None:
-                    data_to_encode = None
-                else:
-                    samples_i = torch.multinomial(
-                        probs_i, num_samples=num_i,
-                        replacement=True)  # [bs, num_i]
-                    data_to_encode = samples_i.view(-1, 1)
-
-                # Encode input: i.e., put sampled vars into input buffer.
-                if data_to_encode is not None:  # Wildcards are encoded already.
-                    if not isinstance(self.model, transformer.Transformer):
-                        if natural_idx == 0:
-                            self.model.EncodeInput(
-                                data_to_encode,
-                                natural_col=0,
-                                out=inp[:, :self.model.
-                                        input_bins_encoded_cumsum[0]])
-                        else:
-                            l = self.model.input_bins_encoded_cumsum[natural_idx
-                                                                     - 1]
-                            r = self.model.input_bins_encoded_cumsum[
-                                natural_idx]
-                            self.model.EncodeInput(data_to_encode,
-                                                   natural_col=natural_idx,
-                                                   out=inp[:, l:r])
-                    else:
-                        # Transformer.  Need special treatment due to
-                        # right-shift.
-                        l = (natural_idx + 1) * self.model.d_model
-                        r = l + self.model.d_model
-                        if i == 0:
-                            # Let's also add E_pos=0 to SOS (if enabled).
-                            # This is a no-op if disabled pos embs.
-                            self.model.EncodeInput(
-                                data_to_encode,  # Will ignore.
-                                natural_col=-1,  # Signals SOS.
-                                out=inp[:, :self.model.d_model])
-
-                        if transformer.MASK_SCHEME == 1:
-                            # Should encode natural_col \in [0, ncols).
-                            self.model.EncodeInput(data_to_encode,
-                                                   natural_col=natural_idx,
-                                                   out=inp[:, l:r])
-                        elif natural_idx < self.model.nin - 1:
-                            # If scheme is 0, should not encode the last
-                            # variable.
-                            self.model.EncodeInput(data_to_encode,
-                                                   natural_col=natural_idx,
-                                                   out=inp[:, l:r])
-
-                # Actual forward pass.
-                next_natural_idx = i + 1 if ordering is None else ordering[i +
-                                                                           1]
-                if self.shortcircuit and operators[next_natural_idx] is None:
-                    # If next variable in line is wildcard, then don't do
-                    # this forward pass.  Var 'logits' won't be accessed.
-                    continue
-
-                if hasattr(self.model, 'do_forward'):
-                    # With a specific ordering.
-                    logits = self.model.do_forward(inp, ordering)
-                else:
-                    if self.traced_fwd is not None:
-                        logits = self.traced_fwd(inp)
-                    else:
-                        logits = self.model.forward_with_encoded_input(inp)
+        # torch.set_printoptions(profile="full")
 
 
         # Doing this convoluted scheme because m_p[0] is a scalar, and
         # we want the correct shape to broadcast.
 
         if self.groupby_col is None:
-            p = masked_probs[1]
-            for ls in masked_probs[2:]:
-                p *= ls
-            p *= masked_probs[0]
-            total_row = len(self.table.data)
-            p_last = prob_last.mean(dim=0)
-            last_vals = np.nan_to_num(columns[-1].all_distinct_values)
-            avg_est_value = np.dot(p_last, last_vals)
-            count_est_value = total_row*p.mean().item()
-            sum_est_value = avg_est_value * count_est_value
-            return [avg_est_value, count_est_value, sum_est_value]
+            result = self.runModel(valid_i_list, operators, logits,
+                                   ordering, columns, inp, select_col)
+            return result
         else:
             results = []
             valid_list = []
             value_list = []
-            valid_list = self.generateValidList(columns, valid_i_list, len(columns) - len(self.groupby_col)-1, valid_list, value_list)
+            groupby_col = [self.table.ColumnIndex(n) for n in self.groupby_col]
+            valid_list = self.generateValidList(columns, valid_i_list, 0, groupby_col, valid_list, value_list)
             for valid_i_list, value in valid_list:
-                result = self.runModel(valid_i_list, len(self.groupby_col), masked_probs, operators, logits,
-                                              ordering, columns)
+                result = self.runModel(valid_i_list, operators, logits, ordering, columns, inp, select_col)
                 if result is not None and result[1] > 0.5:
                     results.append(value + result)
-                # print(results)
             return results
 
-    def generateValidList(self, columns, valid_i_list, i, valid_list, value_list):
-        # print('valid_i_list', valid_i_list)
-        if i < len(columns)-1:
-            for val in columns[i].all_distinct_values:
+    def generateValidList(self, columns, valid_i_list, i, groupby_col, valid_list, value_list):
+        if i < len(groupby_col):
+            idx = groupby_col[i]
+            for val in columns[idx].all_distinct_values:
                 value_list = []
-                valid_i = np.equal(columns[i].all_distinct_values,
+                valid_i = np.equal(columns[idx].all_distinct_values,
                                    val).astype(np.float32, copy=False)
-                valid_i_list[i] = torch.as_tensor(valid_i, device=self.device)
+                valid_i_list[idx] = torch.as_tensor(valid_i, device=self.device)
                 value_list.append(val)
-                valid_list.extend(copy.deepcopy(self.generateValidList(columns, valid_i_list, i + 1, valid_list, value_list)))
-                # print('valid_list', valid_list)
+                valid_list.extend(copy.deepcopy(self.generateValidList(columns, valid_i_list, i + 1, groupby_col, valid_list, value_list)))
             return valid_list
         else:
             return [(valid_i_list, value_list)]
 
 
-    def runModel(self, valid_i_list, length, masked, operators, logits, ordering, columns):
-        # print(valid_i_list)
-        masked_probs = copy.deepcopy(masked)
-        inp = self.inp.zero_()
+    def runModel(self, valid_i_list, operators, logits, ordering, columns, inp, select_col):
+        masked_probs = []
+        ncol = len(columns)
 
-        for i in range(len(columns)-length-1, len(columns)):
-            natural_idx = i
+        for i in range(0, ncol):
+            natural_idx = i if ordering is None else ordering[i]
             # If wildcard enabled, 'logits' wasn't assigned last iter.
             if not self.shortcircuit or operators[natural_idx] is not None:
                 probs_i = torch.softmax(
@@ -477,8 +359,8 @@ class ProgressiveSampling(CardEst):
                 valid_i = valid_i_list[i]
                 if valid_i is not None:
                     probs_i *= valid_i
-                if i == len(valid_i_list) - 1:
-                    prob_last = probs_i
+                if i == select_col:
+                    prob_select = probs_i
 
                 probs_i_summed = probs_i.sum(1)
 
@@ -489,7 +371,7 @@ class ProgressiveSampling(CardEst):
                 paths_vanished = (probs_i_summed <= 0).view(-1, 1)
                 probs_i = probs_i.masked_fill_(paths_vanished, 1.0)
 
-            if i < len(valid_i_list) - 1:
+            if i < ncol - 1:
                 # Num samples to draw for column i.
                 if i != 0:
                     num_i = 1
@@ -504,6 +386,10 @@ class ProgressiveSampling(CardEst):
                         probs_i, num_samples=num_i,
                         replacement=True)  # [bs, num_i]
                     data_to_encode = samples_i.view(-1, 1)
+                    if i == select_col:
+                        vals = data_to_encode.unique().tolist()
+                        select_col_group = {val: np.where(data_to_encode == val)[0] for val in vals}
+
 
                 # Encode input: i.e., put sampled vars into input buffer.
                 if data_to_encode is not None:  # Wildcards are encoded already.
@@ -524,8 +410,7 @@ class ProgressiveSampling(CardEst):
                                                    out=inp[:, l:r])
 
                 # Actual forward pass.
-                next_natural_idx = i + 1 if ordering is None else ordering[i +
-                                                                           1]
+                next_natural_idx = i + 1 if ordering is None else ordering[i + 1]
                 if self.shortcircuit and operators[next_natural_idx] is None:
                     # If next variable in line is wildcard, then don't do
                     # this forward pass.  Var 'logits' won't be accessed.
@@ -545,155 +430,36 @@ class ProgressiveSampling(CardEst):
 
         p *= masked_probs[0]
 
-        p_last = prob_last.mean(dim=0)
-        last_vals = np.nan_to_num(columns[-1].all_distinct_values)
-        avg_est_value = np.dot(p_last, last_vals)
+        p_selects = np.zeros(len(columns[select_col].all_distinct_values))
+        if select_col == ncol-1:
+            p_selects = prob_select.mean(dim=0)
+        else:
+            prob_select = prob_select.mean(dim=0)
+            for group in select_col_group:
+                idxs = select_col_group[group]
+                prob = prob_select[group]
+                select_probs = []
+                for i in range(select_col+1, ncol):
+                    probs_i = torch.softmax(self.model.logits_for_col(i, logits), 1)
+                    valid_i = valid_i_list[i]
+                    if valid_i is not None:
+                        probs_i *= valid_i
+
+                    probs_i_summed = probs_i.sum(1)
+                    select_probs.append(probs_i_summed[idxs])
+                p_select = select_probs[0]
+                for sp in select_probs[1:]:
+                    p_select *= sp
+                p_ = masked_probs[select_col+1]
+                for ls in masked_probs[select_col+2:]:
+                    p_ *= ls
+                p_select = prob * p_select.mean(dim=0) / p_.mean(dim=0)
+                p_selects[group] = p_select
+        vals = np.nan_to_num(columns[select_col].all_distinct_values)
+        avg_est_value = np.dot(p_selects, vals)
         count_est_value = len(self.table.data) * p.mean().item()
         sum_est_value = avg_est_value * count_est_value
         return [avg_est_value, count_est_value, sum_est_value]
-        # if count_est_value >= 0.5:
-        #     return [avg_est_value, count_est_value, sum_est_value]
-        # else:
-        #     return None
-
-        # false_positive = 0
-        # false_negative = 0
-        # est = 0
-        # for i, g in enumerate(columns[ncols - 2].all_distinct_values):
-        #     # groupby_count_est_value = count_est_value * prob_groupby.mean(dim=0)[i]
-        #     avg, cnt, sum = self.calculate_group(valid_i_list, ncols, columns, operators, g, ordering, num_samples, inp, total_row)
-        #     if cnt > 1:
-        #         found = False
-        #         for name, real_avg, real_cnt, real_sum in groupby_values:
-        #             if name == g:
-        #                 print(real_avg, real_cnt, real_sum)
-        #                 print(g, avg, np.ceil(cnt), sum)
-        #                 self.write_groupby_row(g,real_avg, avg,real_cnt, np.ceil(cnt),real_sum, sum)
-        #                 found = True
-        #                 est += 1
-        #                 break
-        #         if not found:
-        #             false_positive += 1
-        # false_negative = len(groupby_values) - est
-        # self.write_groupby_cnt_res(len(groupby_values), false_positive, false_negative)
-        #
-        # return p.mean().item()
-    #
-    # def calculate_group(self, valid_i_list, ncols, columns, operators, val, ordering, num_samples, inp, total_row):
-    #     idx = ncols-2
-    #     valid_i = np.equal(columns[idx].all_distinct_values,
-    #                       val).astype(np.float32,copy=False)
-    #     valid_i_list[ncols-2] = torch.as_tensor(valid_i, device=self.device)
-    #     masked_probs = []
-    #     logits = self.init_logits
-    #     for i in range(ncols):
-    #         natural_idx = i if ordering is None else ordering[i]
-    #
-    #         # If wildcard enabled, 'logits' wasn't assigned last iter.
-    #         if not self.shortcircuit or operators[natural_idx] is not None:
-    #             probs_i = torch.softmax(
-    #                 self.model.logits_for_col(natural_idx, logits), 1)
-    #
-    #             valid_i = valid_i_list[i]
-    #             if valid_i is not None:
-    #                 probs_i *= valid_i
-    #             if i == ncols - 1:
-    #                 prob_last = probs_i
-    #
-    #             probs_i_summed = probs_i.sum(1)
-    #
-    #             masked_probs.append(probs_i_summed)
-    #
-    #             # If some paths have vanished (~0 prob), assign some nonzero
-    #             # mass to the whole row so that multinomial() doesn't complain.
-    #             paths_vanished = (probs_i_summed <= 0).view(-1, 1)
-    #             probs_i = probs_i.masked_fill_(paths_vanished, 1.0)
-    #
-    #         if i < ncols - 1:
-    #             # Num samples to draw for column i.
-    #             if i != 0:
-    #                 num_i = 1
-    #             else:
-    #                 num_i = num_samples if num_samples else int(
-    #                     self.r * self.dom_sizes[natural_idx])
-    #
-    #             if self.shortcircuit and operators[natural_idx] is None:
-    #                 data_to_encode = None
-    #             else:
-    #                 samples_i = torch.multinomial(
-    #                     probs_i, num_samples=num_i,
-    #                     replacement=True)  # [bs, num_i]
-    #                 data_to_encode = samples_i.view(-1, 1)
-    #
-    #             # Encode input: i.e., put sampled vars into input buffer.
-    #             if data_to_encode is not None:  # Wildcards are encoded already.
-    #                 if not isinstance(self.model, transformer.Transformer):
-    #                     if natural_idx == 0:
-    #                         self.model.EncodeInput(
-    #                             data_to_encode,
-    #                             natural_col=0,
-    #                             out=inp[:, :self.model.
-    #                                 input_bins_encoded_cumsum[0]])
-    #                     else:
-    #                         l = self.model.input_bins_encoded_cumsum[natural_idx
-    #                                                                  - 1]
-    #                         r = self.model.input_bins_encoded_cumsum[
-    #                             natural_idx]
-    #                         self.model.EncodeInput(data_to_encode,
-    #                                                natural_col=natural_idx,
-    #                                                out=inp[:, l:r])
-    #
-    #             # Actual forward pass.
-    #             next_natural_idx = i + 1 if ordering is None else ordering[i +
-    #                                                                        1]
-    #             if self.shortcircuit and operators[next_natural_idx] is None:
-    #                 # If next variable in line is wildcard, then don't do
-    #                 # this forward pass.  Var 'logits' won't be accessed.
-    #                 continue
-    #
-    #             if hasattr(self.model, 'do_forward'):
-    #                 # With a specific ordering.
-    #                 logits = self.model.do_forward(inp, ordering)
-    #             else:
-    #                 if self.traced_fwd is not None:
-    #                     logits = self.traced_fwd(inp)
-    #                 else:
-    #                     logits = self.model.forward_with_encoded_input(inp)
-    #     p = masked_probs[1]
-    #     for ls in masked_probs[2:]:
-    #         p *= ls
-    #
-    #     p *= masked_probs[0]
-    #
-    #     p_last = prob_last.mean(dim=0)
-    #     last_vals = np.nan_to_num(columns[ncols - 1].all_distinct_values)
-    #     avg_est_value = np.dot(p_last.cpu(), last_vals)
-    #     count_est_value = total_row * p.mean().item()
-    #     sum_est_value = avg_est_value * count_est_value
-    #     return avg_est_value, count_est_value, sum_est_value
-    #
-    # def write_groupby_cnt_res(self, true_cnt, fp, fn):
-    #     import csv
-    #     with open('ss_results_groupby_cnt.csv', 'a', encoding='UTF8') as f:
-    #         writer = csv.writer(f)
-    #         writer.writerow([true_cnt, fp, fn])
-    # def write_groupby_row(self, g, r1, e1, r2, e2, r3, e3):
-    #     import csv
-    #     with open('ss_results_groupby.csv', 'a', encoding='UTF8') as f:
-    #         writer = csv.writer(f)
-    #         writer.writerow([g, r1, e1, r2, e2, r3, e3])
-    #
-    # def write_a_row(self, r1, e1, r2, e2, r3, e3):
-    #     import csv
-    #     with open('ss_results_sum.csv', 'a', encoding='UTF8') as f:
-    #         writer = csv.writer(f)
-    #         writer.writerow([r1, e1])
-    #     with open('ss_results_avg.csv', 'a', encoding='UTF8') as f:
-    #         writer = csv.writer(f)
-    #         writer.writerow([r2, e2])
-    #     with open('ss_results_count.csv', 'a', encoding='UTF8') as f:
-    #         writer = csv.writer(f)
-    #         writer.writerow([r3, e3])
 
     def Query(self, columns, operators, vals):
         # Massages queries into natural order.
