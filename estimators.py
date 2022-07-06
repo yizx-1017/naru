@@ -388,7 +388,7 @@ class ProgressiveSampling(CardEst):
                     data_to_encode = samples_i.view(-1, 1)
                     if i == select_col:
                         vals = data_to_encode.unique().tolist()
-                        select_col_group = {val: np.where(data_to_encode == val)[0] for val in vals}
+                        select_col_group = {val: torch.where(data_to_encode == val)[0] for val in vals}
 
 
                 # Encode input: i.e., put sampled vars into input buffer.
@@ -457,8 +457,11 @@ class ProgressiveSampling(CardEst):
                 # print(p_select.mean(dim=0))
                 p_select = p_select.mean(dim=0) / p.mean()
                 p_selects[group] = p_select
+        print('sum', p_selects.sum())
+        torch.set_printoptions(profile="full")
+        #print('p_selects', torch.from_numpy(p_selects))
         vals = np.nan_to_num(columns[select_col].all_distinct_values)
-        avg_est_value = np.dot(p_selects, vals)
+        avg_est_value = torch.dot(torch.from_numpy(p_selects),torch.from_numpy(vals))/p_selects.sum()
         count_est_value = len(self.table.data) * p.mean().item()
         sum_est_value = avg_est_value * count_est_value
         return [avg_est_value, count_est_value, sum_est_value]
