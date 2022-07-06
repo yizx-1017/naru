@@ -430,22 +430,22 @@ class ProgressiveSampling(CardEst):
 
         p *= masked_probs[0]
 
-        p_selects = np.zeros(len(columns[select_col].all_distinct_values))
         if select_col == ncol-1:
             p_selects = prob_select.mean(dim=0)
         else:
-            prob_select = prob_select.mean(dim=0)
+            p_selects = np.zeros(len(columns[select_col].all_distinct_values))
             for group in select_col_group:
                 idxs = select_col_group[group]
-                prob = prob_select[group]
                 select_probs = []
-                for i in range(select_col+1, ncol):
+                for i in range(0, ncol):
                     probs_i = torch.softmax(self.model.logits_for_col(i, logits), 1)
                     valid_i = valid_i_list[i]
                     if valid_i is not None:
                         probs_i *= valid_i
-
-                    probs_i_summed = probs_i.sum(1)
+                    if i == select_col:
+                        probs_i_summed = probs_i[:, group]
+                    else:
+                        probs_i_summed = probs_i.sum(1)
                     select_probs.append(probs_i_summed[idxs])
                 p_select = select_probs[0]
                 for sp in select_probs[1:]:
@@ -453,7 +453,9 @@ class ProgressiveSampling(CardEst):
                 p_ = masked_probs[select_col+1]
                 for ls in masked_probs[select_col+2:]:
                     p_ *= ls
-                p_select = prob * p_select.mean(dim=0) / p_.mean(dim=0)
+                # print(prob)
+                # print(p_select.mean(dim=0))
+                p_select = p_select.mean(dim=0) / p.mean()
                 p_selects[group] = p_select
         vals = np.nan_to_num(columns[select_col].all_distinct_values)
         avg_est_value = np.dot(p_selects, vals)
