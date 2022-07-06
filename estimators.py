@@ -359,7 +359,7 @@ class ProgressiveSampling(CardEst):
                 valid_i = valid_i_list[i]
                 if valid_i is not None:
                     probs_i *= valid_i
-                if i == select_col:
+                if i == ncol-1:
                     prob_select = probs_i
 
                 probs_i_summed = probs_i.sum(1)
@@ -386,9 +386,9 @@ class ProgressiveSampling(CardEst):
                         probs_i, num_samples=num_i,
                         replacement=True)  # [bs, num_i]
                     data_to_encode = samples_i.view(-1, 1)
-                    if i == select_col:
-                        vals = data_to_encode.unique().tolist()
-                        select_col_group = {val: torch.where(data_to_encode == val)[0] for val in vals}
+                    # if i == select_col:
+                    #     vals = data_to_encode.unique().tolist()
+                    #     select_col_group = {val: torch.where(data_to_encode == val)[0] for val in vals}
 
 
                 # Encode input: i.e., put sampled vars into input buffer.
@@ -430,38 +430,36 @@ class ProgressiveSampling(CardEst):
 
         p *= masked_probs[0]
 
-        if select_col == ncol-1:
-            p_selects = prob_select.mean(dim=0)
-        else:
-            p_selects = np.zeros(len(columns[select_col].all_distinct_values))
-            for group in select_col_group:
-                idxs = select_col_group[group]
-                select_probs = []
-                for i in range(0, ncol):
-                    probs_i = torch.softmax(self.model.logits_for_col(i, logits), 1)
-                    valid_i = valid_i_list[i]
-                    if valid_i is not None:
-                        probs_i *= valid_i
-                    if i == select_col:
-                        probs_i_summed = probs_i[:, group]
-                    else:
-                        probs_i_summed = probs_i.sum(1)
-                    select_probs.append(probs_i_summed[idxs])
-                p_select = select_probs[0]
-                for sp in select_probs[1:]:
-                    p_select *= sp
-                p_ = masked_probs[select_col+1]
-                for ls in masked_probs[select_col+2:]:
-                    p_ *= ls
-                # print(prob)
-                # print(p_select.mean(dim=0))
-                p_select = p_select.mean(dim=0) / p.mean()
-                p_selects[group] = p_select
+        p_selects = prob_select.mean(dim=0)
+        # if select_col == ncol-1:
+        #     p_selects = prob_select.mean(dim=0)
+        # else:
+        #     p_selects = np.zeros(len(columns[select_col].all_distinct_values))
+        #     for group in select_col_group:
+        #         idxs = select_col_group[group]
+        #         select_probs = []
+        #         for i in range(0, ncol):
+        #             probs_i = torch.softmax(self.model.logits_for_col(i, logits), 1)
+        #             valid_i = valid_i_list[i]
+        #             if valid_i is not None:
+        #                 probs_i *= valid_i
+        #             if i == select_col:
+        #                 probs_i_summed = probs_i[:, group]
+        #             else:
+        #                 probs_i_summed = probs_i.sum(1)
+        #             select_probs.append(probs_i_summed[idxs])
+        #         p_select = select_probs[0]
+        #         for sp in select_probs[1:]:
+        #             p_select *= sp
+        #
+        #         p_select = p_select.mean(dim=0) / p.mean()
+        #         p_selects[group] = p_selects
         print('sum', p_selects.sum())
-        torch.set_printoptions(profile="full")
+
         #print('p_selects', torch.from_numpy(p_selects))
-        vals = np.nan_to_num(columns[select_col].all_distinct_values)
-        avg_est_value = torch.dot(torch.from_numpy(p_selects),torch.from_numpy(vals))/p_selects.sum()
+        vals = torch.nan_to_num(torch.from_numpy(columns[select_col].all_distinct_values))
+        # torch.set_printoptions(profile="full")
+        avg_est_value = torch.dot(p_selects, vals.float())
         count_est_value = len(self.table.data) * p.mean().item()
         sum_est_value = avg_est_value * count_est_value
         return [avg_est_value, count_est_value, sum_est_value]

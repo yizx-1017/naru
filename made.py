@@ -634,6 +634,14 @@ class MADE(nn.Module):
 
         return self.net(x)
 
+    def do_forward(self, x, ordering):
+        """Performs forward pass, invoking a specified ordering."""
+        self.update_masks(invoke_order=ordering)
+        if self.direct_io_layer is not None:
+            residual = self.direct_io_layer(x)
+            return self.net(x) + residual
+        return self.net(x)
+
     def forward_with_encoded_input(self, x):
 
         if self.direct_io_layer is not None:

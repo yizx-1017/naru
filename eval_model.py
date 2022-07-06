@@ -73,7 +73,7 @@ parser.add_argument('--layers', type=int, default=4, help='# layers in FC.')
 parser.add_argument('--residual', action='store_true', help='ResMade?')
 parser.add_argument('--direct-io', action='store_true', help='Do direct IO?')
 parser.add_argument(
-    '--inv-order',
+    '--inv_order',
     action='store_true',
     help='Set this flag iff using MADE and specifying --order. Flag --order'\
     'lists natural indices, e.g., [0 2 1] means variable 2 appears second.'\
@@ -568,12 +568,14 @@ def Main():
     parsed_ckpts = []
 
     for s in selected_ckpts:
-        if args.order is None:
-            z = re.match('.+model([\d\.]+)-data([\d\.]+).+seed([\d\.]+).*.pt',
-                         s)
-        else:
-            z = re.match(
-                '.+model([\d\.]+)-data([\d\.]+).+seed([\d\.]+)-order.*.pt', s)
+        z = re.match('.+model([\d\.]+)-data([\d\.]+).+seed([\d\.]+).*.pt',
+                     s)
+        # if args.order is None:
+        #     z = re.match('.+model([\d\.]+)-data([\d\.]+).+seed([\d\.]+).*.pt',
+        #                  s)
+        # else:
+        #     z = re.match(
+        #         '.+model([\d\.]+)-data([\d\.]+).+seed([\d\.]+)-order.*.pt', s)
         assert z
         model_bits = float(z.group(1))
         data_bits = float(z.group(2))
@@ -581,6 +583,7 @@ def Main():
         bits_gap = model_bits - data_bits
 
         order = None
+
         if args.order is not None:
             order = list(args.order)
 
