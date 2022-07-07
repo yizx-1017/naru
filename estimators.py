@@ -255,9 +255,6 @@ class ProgressiveSampling(CardEst):
         ncols = len(columns)
         logits = self.init_logits
         select_col = self.table.ColumnIndex(self.agg_col)
-        if inp is None:
-            inp = self.inp[:num_samples]
-        masked_probs = []
 
         # Use the query to filter each column's domain.
         valid_i_list = [None] * ncols  # None means all valid.
@@ -316,7 +313,7 @@ class ProgressiveSampling(CardEst):
 
         if self.groupby_col is None:
             result = self.runModel(valid_i_list, operators, logits,
-                                   ordering, columns, inp, select_col)
+                                   ordering, columns, inp, select_col, num_samples)
             return result
         else:
             results = []
@@ -324,8 +321,9 @@ class ProgressiveSampling(CardEst):
             value_list = []
             groupby_col = [self.table.ColumnIndex(n) for n in self.groupby_col]
             valid_list = self.generateValidList(columns, valid_i_list, 0, groupby_col, valid_list, value_list)
+            num_samples = num_samples // len(valid_list)
             for valid_i_list, value in valid_list:
-                result = self.runModel(valid_i_list, operators, logits, ordering, columns, inp, select_col)
+                result = self.runModel(valid_i_list, operators, logits, ordering, columns, inp, select_col, num_samples)
                 if result is not None and result[1] > 0.5:
                     results.append(value + result)
             return results
@@ -345,7 +343,8 @@ class ProgressiveSampling(CardEst):
             return [(valid_i_list, value_list)]
 
 
-    def runModel(self, valid_i_list, operators, logits, ordering, columns, inp, select_col):
+    def runModel(self, valid_i_list, operators, logits, ordering, columns, inp, select_col, num_samples):
+        inp = self.inp[:num_samples]
         masked_probs = []
         ncol = len(columns)
 
@@ -356,7 +355,7 @@ class ProgressiveSampling(CardEst):
                 probs_i = torch.softmax(
                     self.model.logits_for_col(natural_idx, logits), 1)
 
-                valid_i = valid_i_list[i]
+                valid_i = valid_i_list[natural_idx]
                 if valid_i is not None:
                     probs_i *= valid_i
                 if i == ncol-1:
@@ -376,7 +375,7 @@ class ProgressiveSampling(CardEst):
                 if i != 0:
                     num_i = 1
                 else:
-                    num_i = self.num_samples if self.num_samples else int(
+                    num_i = num_samples if num_samples else int(
                         self.r * self.dom_sizes[natural_idx])
 
                 if self.shortcircuit and operators[natural_idx] is None:
@@ -456,7 +455,7 @@ class ProgressiveSampling(CardEst):
         #         p_selects[group] = p_selects
 
         #print('p_selects', torch.from_numpy(p_selects))
-        vals = torch.nan_to_num(torch.from_numpy(columns[select_col].all_distinct_values))
+        vals = torch.nan_to_num(torch.as_tensor(columns[select_col].all_distinct_values, device=self.device))
         # torch.set_printoptions(profile="full")
         avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy()
         count_est_value = len(self.table.data) * p.mean().item()

@@ -509,7 +509,7 @@ def inference(est, real):
 def SaveResults(est, real, est_result, real_result, query):
     t = time.strftime('%b-%d-%Y_%H%M', time.localtime())
     if query is not None:
-        path = './results/' + t + '-' + args.dataset + '-' + query + '.csv'
+        path = './results/' + t + '-' + query + '.csv'
     else:
         path = './results/' + t + '-' + args.dataset + '.csv'
     if len(est_result) == 3 and est_result[0] is not list:
