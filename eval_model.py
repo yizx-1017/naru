@@ -1,7 +1,9 @@
 """Evaluate estimators (Naru or others) on queries."""
 import argparse
 import collections
+import csv
 import glob
+import logging
 import os
 import pickle
 import re
@@ -24,6 +26,8 @@ torch.backends.cudnn.benchmark = True
 
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('Device', DEVICE)
+
+logging.basicConfig(filename='test.log', filemode='a', format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 parser = argparse.ArgumentParser()
 
@@ -140,6 +144,13 @@ parser.add_argument(
     type=int,
     default=30000,
     help='Maximum number of partitions of the Maxdiff histogram.')
+
+# Save Result
+parser.add_argument(
+    '--save_result',
+    action='store_true',
+    help='Turn on to write results in results/'
+)
 
 args = parser.parse_args()
 
@@ -495,12 +506,12 @@ def LoadOracleCardinalities():
 def inference(est, real):
     return [est, real, abs(est-real)/real]
 
-def SaveResults(est, real, est_result, real_result):
+def SaveResults(est, real, est_result, real_result, query):
     t = time.strftime('%b-%d-%Y_%H%M', time.localtime())
-    path = './results/' + t + '-' + args.dataset
-    # print(est_result)
-    # print(real_result)
-    # print(est.query_dur_ms, real.query_dur_ms)
+    if query is not None:
+        path = './results/' + t + '-' + args.dataset + '-' + query
+    else:
+        path = './results/' + t + '-' + args.dataset
     if len(est_result) == 3 and est_result[0] is not list:
         data = {
             'avg': inference(est_result[0], real_result[0]),
@@ -509,6 +520,8 @@ def SaveResults(est, real, est_result, real_result):
             'query_dur_ms': inference(est.query_dur_ms[0], real.query_dur_ms[0])
         }
         results = pd.DataFrame(data, index=['est', 'real', 'error'])
+        results.to_csv(path)
+
     else:
         data = {
             'avg': [row[1] for row in est_result],
@@ -532,24 +545,44 @@ def SaveResults(est, real, est_result, real_result):
                 cnt_error.append(abs(row[1]-row[4])/row[4])
                 sum_error.append(abs(row[2]-row[5])/row[5])
         print(np.mean(avg_error), np.mean(cnt_error), np.mean(sum_error))
+        results.to_csv(path)
+        with open(path, 'a') as f:
+            writer = csv.writer(f)
+            writer.writerow([np.mean(avg_error), np.mean(cnt_error), np.mean(sum_error)])
+            writer.writerow(inference(est.query_dur_ms[0], real.query_dur_ms[0]))
 
-    results.to_csv(path)
+    return path
+
 
 def Main():
+    query = None
     if args.query:
-        if args.groupby_col is not None:
-            groupby_col = ast.literal_eval(args.groupby_col)
-        else:
-            groupby_col = None
-
         agg_col = args.agg_col
+        where_str = ''
         if args.where_col is not None:
             where_col = ast.literal_eval(args.where_col)
             where_ops = ast.literal_eval(args.where_ops)
             where_val = ast.literal_eval(args.where_val)
+            where_str = ' where '
+            for i, col in enumerate(where_col):
+                if i != 0:
+                    where_str += 'AND'
+                where_str += where_col[i]
+                where_str += where_col[i]
+                for j, op in enumerate(where_ops[i]):
+                    where_str += str(where_ops[i][j]) + str(where_val[i][j])
         else:
             where_col = where_ops = where_val = None
-
+        query = '\'select ' + agg_col + ' from ' + args.dataset + where_str
+        if args.groupby_col is not None:
+            groupby_col = ast.literal_eval(args.groupby_col)
+            query += ' group by '
+            for col in groupby_col:
+                query += str(col)
+        else:
+            groupby_col = None
+        query += '\''
+        logging.info('query '+ query)
     all_ckpts = glob.glob('./models/{}'.format(args.glob))
     if args.blacklist:
         all_ckpts = [ckpt for ckpt in all_ckpts if args.blacklist not in ckpt]
@@ -682,7 +715,10 @@ def Main():
 
     # SaveEstimators(args.err_csv, estimators)
     # print('...Done, result:', args.err_csv)
-    SaveResults(est, real, est_result, real_result)
+    if args.save_result:
+        path = SaveResults(est, real, est_result, real_result, query)
+        print('...Done, result:', path)
+        logging.info('write results in '+ path)
 
 
 if __name__ == '__main__':

@@ -454,12 +454,11 @@ class ProgressiveSampling(CardEst):
         #
         #         p_select = p_select.mean(dim=0) / p.mean()
         #         p_selects[group] = p_selects
-        print('sum', p_selects.sum())
 
         #print('p_selects', torch.from_numpy(p_selects))
         vals = torch.nan_to_num(torch.from_numpy(columns[select_col].all_distinct_values))
         # torch.set_printoptions(profile="full")
-        avg_est_value = torch.dot(p_selects, vals.float())
+        avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy()
         count_est_value = len(self.table.data) * p.mean().item()
         sum_est_value = avg_est_value * count_est_value
         return [avg_est_value, count_est_value, sum_est_value]
