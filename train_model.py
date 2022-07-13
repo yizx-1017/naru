@@ -92,7 +92,7 @@ parser.add_argument('--transformer-act',
                     help='Transformer activation.')
 
 # Ordering.
-parser.add_argument('--num-orderings',
+parser.add_argument('--num_orderings',
                     type=int,
                     default=1,
                     help='Number of orderings.')
@@ -146,8 +146,8 @@ def RunEpoch(split,
 
     # How many orderings to run for the same batch?
     nsamples = 1
-    if hasattr(model, 'orderings'):
-        nsamples = len(model.orderings)
+    if hasattr(model, 'num_masks'):
+        nsamples = model.num_masks
 
     for step, xb in enumerate(loader):
         if split == 'train':
@@ -174,11 +174,11 @@ def RunEpoch(split,
         # Forward pass, potentially through several orderings.
         xbhat = None
         model_logits = []
-        num_orders_to_forward = 1
-        if split == 'test' and nsamples > 1:
-            # At test, we want to test the 'true' nll under all orderings.
-            num_orders_to_forward = nsamples
-
+        # num_orders_to_forward = 1
+        # if split == 'test' and nsamples > 1:
+        #     # At test, we want to test the 'true' nll under all orderings.
+        #     num_orders_to_forward = nsamples
+        num_orders_to_forward = nsamples
         for i in range(num_orders_to_forward):
             if hasattr(model, 'update_masks'):
                 # We want to update_masks even for first ever batch.
@@ -189,6 +189,7 @@ def RunEpoch(split,
             if xbhat is None:
                 xbhat = torch.zeros_like(model_out)
             xbhat += model_out
+        xbhat /= num_orders_to_forward
 
         if xbhat.shape == xb.shape:
             if mean:
@@ -278,7 +279,7 @@ def InvertOrder(order):
     return inv_ordering
 
 
-def MakeMade(scale, cols_to_train, seed, fixed_ordering=None):
+def MakeMade(scale, cols_to_train, seed, num_masks=1, fixed_ordering=None):
     if args.inv_order:
         print('Inverting order!')
         fixed_ordering = InvertOrder(fixed_ordering)
@@ -297,6 +298,7 @@ def MakeMade(scale, cols_to_train, seed, fixed_ordering=None):
         natural_ordering=False if seed is not None and seed != 0 else True,
         residual_connections=args.residual,
         fixed_ordering=fixed_ordering,
+        num_masks=num_masks,
         column_masking=args.column_masking,
     ).to(DEVICE)
 
@@ -327,9 +329,9 @@ def InitWeight(m):
         nn.init.normal_(m.weight, std=0.02)
 
 
-def TrainTask(seed=0):
-    torch.manual_seed(0)
-    np.random.seed(0)
+def TrainTask(seed=1017):
+    # torch.manual_seed(0)
+    # np.random.seed(0)
 
     # assert args.dataset in ['dmv-tiny', 'dmv']
     if args.dataset == 'dmv-tiny':
@@ -349,6 +351,11 @@ def TrainTask(seed=0):
         print('Using passed-in order:', args.order)
         fixed_ordering = args.order
 
+    if args.num_orderings is not None:
+        num_masks = args.num_orderings
+    else:
+        num_masks = 1
+
     print(table.data.info())
 
     table_train = table
@@ -363,6 +370,7 @@ def TrainTask(seed=0):
             scale=args.fc_hiddens,
             cols_to_train=table.columns,
             seed=seed,
+            num_masks=num_masks,
             fixed_ordering=fixed_ordering,
         )
         # else:
