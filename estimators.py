@@ -302,10 +302,6 @@ class ProgressiveSampling(CardEst):
                                                natural_col=natural_idx,
                                                out=inp[:, l:r])
 
-        # Actual progressive sampling.  Repeat:
-        #   Sample next var from curr logits -> fill in next var
-        #   Forward pass -> curr logits
-        # torch.set_printoptions(profile="full")
 
 
         # Doing this convoluted scheme because m_p[0] is a scalar, and
@@ -342,12 +338,15 @@ class ProgressiveSampling(CardEst):
         else:
             return [(valid_i_list, value_list)]
 
-
     def runModel(self, valid_i_list, operators, logits, ordering, columns, inp, select_col, num_samples):
         inp = self.inp[:num_samples]
         masked_probs = []
         ncol = len(columns)
 
+        # Actual progressive sampling.  Repeat:
+        #   Sample next var from curr logits -> fill in next var
+        #   Forward pass -> curr logits
+        # torch.set_printoptions(profile="full")
         for i in range(0, ncol):
             natural_idx = i if ordering is None else ordering[i]
             # If wildcard enabled, 'logits' wasn't assigned last iter.
@@ -385,9 +384,6 @@ class ProgressiveSampling(CardEst):
                         probs_i, num_samples=num_i,
                         replacement=True)  # [bs, num_i]
                     data_to_encode = samples_i.view(-1, 1)
-                    # if i == select_col:
-                    #     vals = data_to_encode.unique().tolist()
-                    #     select_col_group = {val: torch.where(data_to_encode == val)[0] for val in vals}
 
 
                 # Encode input: i.e., put sampled vars into input buffer.
@@ -430,33 +426,7 @@ class ProgressiveSampling(CardEst):
         p *= masked_probs[0]
 
         p_selects = prob_select.mean(dim=0)
-        # if select_col == ncol-1:
-        #     p_selects = prob_select.mean(dim=0)
-        # else:
-        #     p_selects = np.zeros(len(columns[select_col].all_distinct_values))
-        #     for group in select_col_group:
-        #         idxs = select_col_group[group]
-        #         select_probs = []
-        #         for i in range(0, ncol):
-        #             probs_i = torch.softmax(self.model.logits_for_col(i, logits), 1)
-        #             valid_i = valid_i_list[i]
-        #             if valid_i is not None:
-        #                 probs_i *= valid_i
-        #             if i == select_col:
-        #                 probs_i_summed = probs_i[:, group]
-        #             else:
-        #                 probs_i_summed = probs_i.sum(1)
-        #             select_probs.append(probs_i_summed[idxs])
-        #         p_select = select_probs[0]
-        #         for sp in select_probs[1:]:
-        #             p_select *= sp
-        #
-        #         p_select = p_select.mean(dim=0) / p.mean()
-        #         p_selects[group] = p_selects
-
-        #print('p_selects', torch.from_numpy(p_selects))
         vals = torch.nan_to_num(torch.as_tensor(columns[select_col].all_distinct_values, device=self.device))
-        # torch.set_printoptions(profile="full")
         avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy()
         count_est_value = len(self.table.data) * p.mean().item()
         sum_est_value = avg_est_value * count_est_value

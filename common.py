@@ -240,7 +240,7 @@ class TableDataset(data.Dataset):
     def __init__(self, table):
         super(TableDataset, self).__init__()
         self.table=table
-	#self.table = copy.deepcopy(table)
+        #self.table = copy.deepcopy(table)
 
         print('Discretizing table...', end=' ')
         s = time.time()
