@@ -24,8 +24,7 @@ def LoadMyDataset(filename='ss.csv'):
     # Make sure that this loads data correctly.
     csv_file = './datasets/{}'.format(filename)
     cols = [
-        'ss_sold_date_sk', 'ss_item_sk', 'ss_customer_sk', 'ss_addr_sk',
-        'ss_store_sk', 'ss_quantity', 'ss_wholesale_cost', 'ss_list_price',
-        'ss_sales_price','ss_ext_tax'
+        'ss_sold_date_sk', 'ss_addr_sk', 'ss_store_sk', 'ss_quantity',
+        'ss_wholesale_cost', 'ss_list_price', 'ss_sales_price'
     ]
     return common.CsvTable('TPCDS', csv_file, cols)
