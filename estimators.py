@@ -324,7 +324,7 @@ class ProgressiveSampling(CardEst):
         inp = self.inp[:num_samples]
         if self.groupby_col is None:
             prob_select = self.runModelStep(valid_i_list, operators, logits,
-                                   ordering, columns, inp, select_col, num_samples, 0, ncol)
+                                   ordering, columns, masked_probs, num_samples, inp, 0, ncol)
             p = masked_probs[1]
             for ls in masked_probs[2:]:
                 p *= ls
@@ -352,7 +352,7 @@ class ProgressiveSampling(CardEst):
                 prob_select = self.runModelStep(valid_i_list, operators, logits, ordering, columns,
                                                               masked, num_samples, inp, ncol-ngroupby-1, ncol)
                 p = masked[1]
-                for ls in masked_probs[2:]:
+                for ls in masked[2:]:
                     p *= ls
                 p *= masked[0]
 
