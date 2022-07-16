@@ -20,6 +20,7 @@ parser = argparse.ArgumentParser()
 
 # Training.
 parser.add_argument('--dataset', type=str, default='dmv-tiny', help='Dataset.')
+parser.add_argument('--col', nargs='+', help='Column names in the dataset that you want to use.')
 parser.add_argument('--num-gpus', type=int, default=0, help='#gpus.')
 parser.add_argument('--bs', type=int, default=1024, help='Batch size.')
 parser.add_argument(
@@ -113,6 +114,7 @@ def Entropy(name, data, bases=None):
     import scipy.stats
     s = 'Entropy of {}:'.format(name)
     ret = []
+    print(data)
     for base in bases:
         assert base == 2 or base == 'e' or base is None
         e = scipy.stats.entropy(data, base=base if base != 'e' else None)
@@ -339,12 +341,12 @@ def TrainTask(seed=1017):
     elif args.dataset == 'dmv':
         table = datasets.LoadDmv()
     else:
-        table = datasets.LoadMyDataset(args.dataset)
+        table = datasets.LoadMyDataset(args.dataset, args.col)
 
     table_bits = Entropy(
         table,
-        table.data.fillna(value=0).groupby([c.name for c in table.columns
-                                           ]).size(), [2])[0]
+        table.data.fillna(value=0).groupby([c.name for c in table.columns]).size()
+            .reset_index(name='size')["size"].to_numpy(), [2])[0]
     fixed_ordering = None
 
     if args.order is not None:

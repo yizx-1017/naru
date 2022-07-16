@@ -3,12 +3,14 @@ import argparse
 import collections
 import csv
 import glob
+import json
 import logging
 import os
 import pickle
 import re
 import time
 import ast
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -27,7 +29,8 @@ torch.backends.cudnn.benchmark = True
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 print('Device', DEVICE)
 
-logging.basicConfig(filename='test.log', filemode='a', format='%(asctime)s - %(levelname)s - %(message)s', level=logging.INFO)
+logging.basicConfig(filename='test.log', filemode='a', format='%(asctime)s - %(levelname)s - %(message)s',
+                    level=logging.INFO)
 
 parser = argparse.ArgumentParser()
 
@@ -44,6 +47,7 @@ parser.add_argument('--inference-opts',
 
 parser.add_argument('--num-queries', type=int, default=20, help='# queries.')
 parser.add_argument('--dataset', type=str, default='dmv-tiny', help='Dataset.')
+parser.add_argument('--col', nargs='+', help='Column names in the dataset that you want to use.')
 parser.add_argument('--err-csv',
                     type=str,
                     default='results.csv',
@@ -148,7 +152,8 @@ parser.add_argument(
 # Save Result
 parser.add_argument(
     '--save_result',
-    action='store_true',
+    type=str,
+    default='results/1G/query.json',
     help='Turn on to write results in results/'
 )
 
@@ -175,13 +180,13 @@ def MakeTable(groupby_col, agg_col):
     elif args.dataset == 'dmv':
         table = datasets.LoadDmv()
     else:
-        table = datasets.LoadMyDataset(args.dataset)
+        table = datasets.LoadMyDataset(args.dataset, args.col)
     oracle_est = estimators_lib.Oracle(table)
 
     real_result = estimators_lib.RealResult(table, groupby_col, agg_col)
     if args.run_bn:
         return table, common.TableDataset(table), real_result
-    return table, None,  oracle_est, real_result
+    return table, None, oracle_est, real_result
 
 
 def ErrorMetric(est_card, card):
@@ -206,7 +211,7 @@ def SampleTupleThenRandom(all_cols,
         # Giant hack for DMV.
         vals[5] = vals[5].to_datetime64()
 
-    idxs = rng.choice(len(all_cols)-2, replace=False, size=num_filters)
+    idxs = rng.choice(len(all_cols) - 2, replace=False, size=num_filters)
     cols = np.take(all_cols, idxs)
 
     # If dom size >= 10, okay to place a range filter.
@@ -287,11 +292,13 @@ def ReportEsts(estimators):
         v = max(v, np.max(est.errs))
     return v
 
+
 def RunSingleQuery(est, real, where_col, where_ops, where_val):
     # Actual.
     real_result = real.Query(where_col, where_ops, where_val)
     est_result = est.Query(where_col, where_ops, where_val)
     return est_result, real_result
+
 
 def RunN(table,
          cols,
@@ -430,7 +437,7 @@ def MakeMade(scale, cols_to_train, seed, fixed_ordering=None):
     model = made.MADE(
         nin=len(cols_to_train),
         hidden_sizes=[scale] *
-        args.layers if args.layers > 0 else [512, 256, 512, 128, 1024],
+                     args.layers if args.layers > 0 else [512, 256, 512, 128, 1024],
         nout=sum([c.DistributionSize() for c in cols_to_train]),
         input_bins=[c.DistributionSize() for c in cols_to_train],
         input_encoding=args.input_encoding,
@@ -503,24 +510,31 @@ def LoadOracleCardinalities():
         return df.values.reshape(-1)
     return None
 
-def inference(est, real):
-    return [est, real, abs(est-real)/real]
 
-def SaveResults(est, real, est_result, real_result, query):
-    t = time.strftime('%b-%d-%Y_%H%M', time.localtime())
-    if query is not None:
-        path = './results/' + t + '-' + query + '.csv'
-    else:
-        path = './results/' + t + '-' + args.dataset + '.csv'
+def err(est, real):
+    return abs(est - real) / real
+
+
+def saveResults(est, real, est_result, real_result, query, filename):
     if len(est_result) == 3 and est_result[0] is not list:
-        data = {
-            'avg': inference(est_result[0], real_result[0]),
-            'count': inference(est_result[1], real_result[1]),
-            'sum': inference(est_result[2], real_result[2]),
-            'query_dur_ms': inference(est.query_dur_ms[0], real.query_dur_ms[0])
+        result = {
+            'timestamp': str(datetime.now()),
+            'dataset': args.dataset,
+            'model': args.glob,
+            'query': query,
+            'avg_est': est_result[0],
+            'avg_real': real_result[0],
+            'avg_err': err(est_result[0], real_result[0]),
+            'count_est': est_result[1],
+            'count_real': real_result[1],
+            'count_err': err(est_result[1], real_result[1]),
+            'sum_est': est_result[2],
+            'sum_real': real_result[2],
+            'sum_err': err(est_result[2], real_result[2]),
+            'query_dur_ms_est': est.query_dur_ms[0],
+            'query_dur_ms_real': real.query_dur_ms[0],
+            'query_dur_ms_err': err(est.query_dur_ms[0], real.query_dur_ms[0])
         }
-        results = pd.DataFrame(data, index=['est', 'real', 'error'])
-        results.to_csv(path)
 
     else:
         data = {
@@ -541,17 +555,29 @@ def SaveResults(est, real, est_result, real_result, query):
         sum_error = []
         for index, row in results.iterrows():
             if not row.isnull().any():
-                avg_error.append(abs(row[0]-row[3])/row[3])
-                cnt_error.append(abs(row[1]-row[4])/row[4])
-                sum_error.append(abs(row[2]-row[5])/row[5])
+                avg_error.append(abs(row[0] - row[3]) / row[3])
+                cnt_error.append(abs(row[1] - row[4]) / row[4])
+                sum_error.append(abs(row[2] - row[5]) / row[5])
         print(np.mean(avg_error), np.mean(cnt_error), np.mean(sum_error))
-        results.to_csv(path)
-        with open(path, 'a') as f:
-            writer = csv.writer(f)
-            writer.writerow([np.mean(avg_error), np.mean(cnt_error), np.mean(sum_error)])
-            writer.writerow(inference(est.query_dur_ms[0], real.query_dur_ms[0]))
+        result = results.to_dict()
+        result.update({
+            'timestamp': str(datetime.now()),
+            'dataset': args.dataset,
+            'model': args.glob,
+            'query': query,
+            'avg_err': np.mean(avg_error),
+            'count_err': np.mean(cnt_error),
+            'sum_err': np.mean(sum_error),
+            'query_dur_ms_est': est.query_dur_ms[0],
+            'query_dur_ms_real': real.query_dur_ms[0],
+            'query_dur_ms_err': err(est.query_dur_ms[0], real.query_dur_ms[0])
+        })
+    json_object = json.dumps(result, indent=4)
 
-    return path
+    ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+    RESULT_PATH = os.path.join(ROOT_DIR, filename)
+    with open(RESULT_PATH, "w") as outfile:
+        outfile.write(json_object)
 
 
 def Main():
@@ -568,7 +594,6 @@ def Main():
                 if i != 0:
                     where_str += 'AND'
                 where_str += where_col[i]
-                where_str += where_col[i]
                 for j, op in enumerate(where_ops[i]):
                     where_str += str(where_ops[i][j]) + str(where_val[i][j])
         else:
@@ -582,7 +607,7 @@ def Main():
         else:
             groupby_col = None
         query += '\''
-        logging.info('query '+ query)
+        logging.info('query ' + query)
     all_ckpts = glob.glob('./models/{}'.format(args.glob))
     if args.blacklist:
         all_ckpts = [ckpt for ckpt in all_ckpts if args.blacklist not in ckpt]
@@ -715,10 +740,10 @@ def Main():
 
     # SaveEstimators(args.err_csv, estimators)
     # print('...Done, result:', args.err_csv)
-    if args.save_result:
-        path = SaveResults(est, real, est_result, real_result, query)
-        print('...Done, result:', path)
-        logging.info('write results in '+ path)
+    if args.save_result is not None:
+        saveResults(est, real, est_result, real_result, query, args.save_result)
+        print('...Done, result:', args.save_result)
+        logging.info('write results in ' + args.save_result)
 
 
 if __name__ == '__main__':

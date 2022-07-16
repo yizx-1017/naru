@@ -20,10 +20,7 @@ def LoadDmv(filename='Vehicle__Snowmobile__and_Boat_Registrations.csv'):
     return common.CsvTable('DMV', csv_file, cols, type_casts)
 
 
-def LoadMyDataset(filename='ss.csv'):
+def LoadMyDataset(filename, cols):
     # Make sure that this loads data correctly.
     csv_file = './datasets/{}'.format(filename)
-    cols = [
-        'ss_sold_date_sk', 'ss_store_sk', 'ss_sales_price', 'ss_quantity'
-    ]
     return common.CsvTable('TPCDS', csv_file, cols)

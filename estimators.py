@@ -334,7 +334,7 @@ class ProgressiveSampling(CardEst):
 
             p_selects = prob_select.mean(dim=0)
             vals = torch.nan_to_num(torch.as_tensor(columns[select_col].all_distinct_values, device=self.device))
-            avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy()
+            avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy().item()
             count_est_value = len(self.table.data) * p.mean().item()
             sum_est_value = avg_est_value * count_est_value
             return [avg_est_value, count_est_value, sum_est_value]
