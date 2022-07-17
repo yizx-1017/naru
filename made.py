@@ -200,6 +200,7 @@ class MADE(nn.Module):
         self.m = {}
 
         self.update_masks()
+        self.orderings = [self.m[-1]]
 
         # Optimization: cache some values needed in EncodeInput().
         self.bin_as_onehot_shifts = None
@@ -304,22 +305,20 @@ class MADE(nn.Module):
             rng = np.random.RandomState(self.init_seed + i)
             self.seed = (self.init_seed + i + 1) % self.num_masks
             self.m[-1] = invoke_order
-        # elif hasattr(self, 'orderings'):
-        #     # Cycle through the special orderings.
-        #     rng = np.random.RandomState(self.seed)
-        #     self.seed = (self.seed + 1) % self.num_masks
-        #     self.m[-1] = self.orderings[self.seed % 4]
-        elif self.fixed_ordering is not None:
-            # specified fixed_ordering: used when eval special ordering
-            self.m[-1] = np.asarray(self.fixed_ordering)
+        elif hasattr(self, 'orderings'):
+            # Cycle through the special orderings.
+            rng = np.random.RandomState(self.seed)
+            self.seed = (self.seed + 1) % self.num_masks
+            self.m[-1] = self.orderings[self.seed % 4]
         else:
             rng = np.random.RandomState(self.seed)
             self.seed = (self.seed + 1) % self.num_masks
-            # natural ordering: [0 1 ... n-1]
-            # random ordering: generate each time per batch
-            self.m[-1] = np.arange(self.nin) if self.natural_ordering else rng.permutation(self.nin)
+            self.m[-1] = np.arange(
+                self.nin) if self.natural_ordering else rng.permutation(
+                    self.nin)
+            if self.fixed_ordering is not None:
+                self.m[-1] = np.asarray(self.fixed_ordering)
 
-        self.orderings = [self.m[-1]]
         if self.nin > 1:
             for l in range(L):
                 if self.residual_connections:
