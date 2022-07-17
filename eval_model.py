@@ -555,6 +555,8 @@ def LoadOracleCardinalities():
 
 
 def err(est, real):
+    if real == 0:
+        return 'result=0!'
     return abs(est - real) / real
 
 
