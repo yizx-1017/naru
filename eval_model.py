@@ -579,14 +579,14 @@ def saveResults(est, real, est_result, real_result, query, filename):
             'query_dur_ms_est': est.query_dur_ms[0],
             'query_dur_ms_real': real.query_dur_ms[0],
             'query_dur_ms_err': err(est.query_dur_ms[0], real.query_dur_ms[0]),
-
+            'groupby': False
         }
 
     else:
         data = {
-            'avg': [row[1] for row in est_result],
-            'count': [row[2] for row in est_result],
-            'sum': [row[3] for row in est_result],
+            'avg_est': [row[1] for row in est_result],
+            'count_est': [row[2] for row in est_result],
+            'sum_est': [row[3] for row in est_result],
         }
         est_df = pd.DataFrame(data, index=[row[0] for row in est_result])
         data = {
@@ -616,7 +616,8 @@ def saveResults(est, real, est_result, real_result, query, filename):
             'sum_err': np.mean(sum_error),
             'query_dur_ms_est': est.query_dur_ms[0],
             'query_dur_ms_real': real.query_dur_ms[0],
-            'query_dur_ms_err': err(est.query_dur_ms[0], real.query_dur_ms[0])
+            'query_dur_ms_err': err(est.query_dur_ms[0], real.query_dur_ms[0]),
+            'groupby': True
         })
     json_object = json.dumps(result, indent=4)
 
