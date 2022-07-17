@@ -51,7 +51,7 @@ parser.add_argument('--layers', type=int, default=4, help='# layers in FC.')
 parser.add_argument('--residual', action='store_true', help='ResMade?')
 parser.add_argument('--direct-io', action='store_true', help='Do direct IO?')
 parser.add_argument(
-    '--inv-order',
+    '--inv_order',
     action='store_true',
     help='Set this flag iff using MADE and specifying --order. Flag --order '\
     'lists natural indices, e.g., [0 2 1] means variable 2 appears second.'\

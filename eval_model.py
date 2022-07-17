@@ -235,8 +235,7 @@ def SampleTupleThenRandom(all_cols,
 
 def GenerateQuery(all_cols, rng, table, return_col_idx=False):
     """Generate a random query."""
-    # num_filters = rng.randint(5, 10)
-    num_filters = 1
+    num_filters = rng.randint(5, 10)
     cols, ops, vals = SampleTupleThenRandom(all_cols,
                                             num_filters,
                                             rng,
@@ -291,6 +290,44 @@ def ReportEsts(estimators):
               'median', np.quantile(est.errs, 0.5))
         v = max(v, np.max(est.errs))
     return v
+
+def GenerateRandomQuery(table):
+    rng = np.random.RandomState()
+    ncol = len(args.col)
+    p = [0.5, 0.3]
+    p.extend([0.2/(ncol-3)]*(ncol-3))
+    num_cols = rng.choice(range(1, ncol), size=1, p=p)[0]
+    print(num_cols)
+    col_idxs = rng.choice(ncol, replace=False, size=num_cols+1).tolist()
+    agg_col = rng.choice(col_idxs, size=1)[0]
+    col_idxs.remove(agg_col)
+    cols = np.take(table.columns, col_idxs)
+
+    # If dom size >= 10, okay to place a range filter.
+    # Otherwise, low domain size columns should be queried with equality.
+    ops = rng.choice([['<='], ['>='], ['>=', '<='], ['=']], size=num_cols, p=[0.3, 0.3, 0.3, 0.1])
+    ops_all_eqs = ['='] * len(col_idxs)
+    sensible_to_do_range = [c.DistributionSize() >= 10 for c in cols]
+    ops = np.where(sensible_to_do_range, ops, ops_all_eqs)
+    vals = []
+    for i, op in enumerate(ops):
+        if op == ['>=', '<=']:
+            val = rng.choice(cols[col_idxs[i]].all_distinct_values, size=2)
+            val.sort()
+            vals.append(val)
+        else:
+            val = rng.choice(cols[col_idxs[i]].all_distinct_values, size=1)
+            vals.append(val)
+
+    query = {
+        "agg_col": agg_col,
+        "where_col": col_idxs,
+        "where_ops": ops,
+        "where_val": vals,
+        "groupby_col": None
+    }
+    print(query)
+    return query
 
 
 def RunSingleQuery(est, real, where_col, where_ops, where_val):
@@ -621,6 +658,7 @@ def Main():
         table, train_data, oracle_est, real = MakeTable(groupby_col, agg_col)
         cols_to_train = table.columns
 
+    query = GenerateRandomQuery(table)
     Ckpt = collections.namedtuple(
         'Ckpt', 'epoch model_bits bits_gap path loaded_model seed')
     parsed_ckpts = []

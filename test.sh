@@ -6,7 +6,7 @@ python3 train_model.py \
 --col 'ss_sold_date_sk' 'ss_store_sk' 'ss_sales_price' 'ss_quantity' \
 --epochs=10 --warmups=8000 --bs=2048 \
 --residual --layers=5 --fc-hiddens=256 --direct-io \
---num_orderings=5
+--order 0 1 2 3 --inv_order
 
 mkdir -p results/1G
 python eval_model.py \
