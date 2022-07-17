@@ -561,7 +561,7 @@ def err(est, real):
     return abs(est - real) / real
 
 
-def saveResults(est, real, est_result, real_result, query, filename):
+def saveResults(est, real, est_result, real_result, query, order, filename):
     if len(est_result) == 3 and est_result[0] is not list:
         result = {
             'timestamp': str(datetime.now()),
@@ -580,6 +580,7 @@ def saveResults(est, real, est_result, real_result, query, filename):
             'query_dur_ms_est': est.query_dur_ms[0],
             'query_dur_ms_real': real.query_dur_ms[0],
             'query_dur_ms_err': err(est.query_dur_ms[0], real.query_dur_ms[0]),
+            'order': order,
             'groupby': False
         }
 
@@ -618,6 +619,7 @@ def saveResults(est, real, est_result, real_result, query, filename):
             'query_dur_ms_est': est.query_dur_ms[0],
             'query_dur_ms_real': real.query_dur_ms[0],
             'query_dur_ms_err': err(est.query_dur_ms[0], real.query_dur_ms[0]),
+            'order': order,
             'groupby': True
         })
     json_object = json.dumps(result, indent=4)
@@ -798,7 +800,7 @@ def Main():
         est_result, real_result = RunSingleQuery(estimators[0], real, agg_col, where_col, where_ops, where_val,
                                                  groupby_col)
         if args.save_result is not None:
-            saveResults(estimators[0], real, est_result, real_result, querystr, args.save_result)
+            saveResults(estimators[0], real, est_result, real_result, querystr, order, args.save_result)
             print('...Done, result:', args.save_result)
             logging.info('write results in ' + args.save_result)
     else:
@@ -820,7 +822,7 @@ def Main():
                                    query['where_ops'], query['where_val'], g)
                 if args.save_result is not None:
                     save_result = "results/1G/query" + str(cnt) + '.json'
-                    saveResults(estimators[0], real, est_result, real_result, querystr, save_result)
+                    saveResults(estimators[0], real, est_result, real_result, querystr, order, save_result)
                     print('...Done, result:', save_result)
                     logging.info('write results in ' + save_result)
                     cnt += 1
