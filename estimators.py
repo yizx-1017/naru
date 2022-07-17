@@ -39,7 +39,7 @@ class CardEst(object):
 
         self.name = 'CardEst'
 
-    def Query(self, columns, operators, vals):
+    def Query(self, agg_col, columns, operators, vals, groupby_col):
         """Estimates cardinality with the specified conditions.
 
         Args:
@@ -132,13 +132,13 @@ def FillInUnqueriedColumns(table, columns, operators, vals):
     return cs, os, vs
 
 class RealResult(CardEst):
-    def __init__(self, table, groupby_col, agg_col):
+    def __init__(self, table):
         super(RealResult, self).__init__()
         self.table = table
+
+    def Query(self, agg_col, columns, operators, vals, groupby_col):
         self.groupby_col = groupby_col
         self.agg_col = agg_col
-
-    def Query(self, columns, operators, vals):
         self.OnStart()
         df = self.table.data
         for i, col in enumerate(columns):
@@ -177,8 +177,6 @@ class ProgressiveSampling(CardEst):
             model,
             table,
             r,
-            groupby_col,
-            agg_col,
             device=None,
             seed=False,
             cardinality=None,
@@ -186,8 +184,6 @@ class ProgressiveSampling(CardEst):
     ):
         super(ProgressiveSampling, self).__init__()
         torch.set_grad_enabled(False)
-        self.groupby_col = groupby_col
-        self.agg_col = agg_col
         self.model = model
         self.table = table
         self.shortcircuit = shortcircuit
@@ -260,18 +256,18 @@ class ProgressiveSampling(CardEst):
         valid_i_list = [None] * ncols  # None means all valid.
 
         for i in range(ncols):
-            natural_idx = ordering[i]
+            # natural_idx = ordering[i]
 
             # Column i.
-            ops = operators[natural_idx]
+            ops = operators[i]
             # print('ops', ops)
-            valid_i = valid_i_list[natural_idx]
+            valid_i = valid_i_list[i]
             if ops is not None:
                 for j, op in enumerate(ops):
                     if op is not None:
                         # There exists a filter.
-                        valid = OPS[op](columns[natural_idx].all_distinct_values,
-                                          vals[natural_idx][j]).astype(np.float32,
+                        valid = OPS[op](columns[i].all_distinct_values,
+                                          vals[i][j]).astype(np.float32,
                                                                     copy=False)
                         if valid_i is not None:
                             valid_i *= valid
@@ -302,7 +298,27 @@ class ProgressiveSampling(CardEst):
                                                natural_col=natural_idx,
                                                out=inp[:, l:r])
 
-        return self.runModel(valid_i_list, operators, logits, ordering, columns, select_col, num_samples)
+
+
+        # Doing this convoluted scheme because m_p[0] is a scalar, and
+        # we want the correct shape to broadcast.
+
+        if self.groupby_col is None:
+            result = self.runModel(valid_i_list, operators, logits,
+                                   ordering, columns, inp, select_col, num_samples)
+            return result
+        else:
+            results = []
+            valid_list = []
+            value_list = []
+            groupby_col = [self.table.ColumnIndex(n) for n in self.groupby_col]
+            valid_list = self.generateValidList(columns, valid_i_list, 0, groupby_col, valid_list, value_list)
+            num_samples = num_samples // len(valid_list)
+            for valid_i_list, value in valid_list:
+                result = self.runModel(valid_i_list, operators, logits, ordering, columns, inp, select_col, num_samples)
+                if result is not None and result[1] > 0.5:
+                    results.append(value + result)
+            return results
 
     def generateValidList(self, columns, valid_i_list, i, groupby_col, valid_list, value_list):
         if i < len(groupby_col):
@@ -318,62 +334,16 @@ class ProgressiveSampling(CardEst):
         else:
             return [(valid_i_list, value_list)]
 
-    def runModel(self, valid_i_list, operators, logits, ordering, columns, select_col, num_samples):
+    def runModel(self, valid_i_list, operators, logits, ordering, columns, inp, select_col, num_samples):
+        inp = self.inp[:num_samples]
         masked_probs = []
         ncol = len(columns)
-        inp = self.inp[:num_samples]
-        if self.groupby_col is None:
-            prob_select = self.runModelStep(valid_i_list, operators, logits,
-                                   ordering, columns, masked_probs, num_samples, inp, 0, ncol)
-            p = masked_probs[1]
-            for ls in masked_probs[2:]:
-                p *= ls
-            # Doing this convoluted scheme because m_p[0] is a scalar, and
-            # we want the correct shape to broadcast.
-            p *= masked_probs[0]
 
-            p_selects = prob_select.mean(dim=0)
-            vals = torch.nan_to_num(torch.as_tensor(columns[select_col].all_distinct_values, device=self.device))
-            avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy().item()
-            count_est_value = len(self.table.data) * p.mean().item()
-            sum_est_value = avg_est_value * count_est_value
-            return [avg_est_value, count_est_value, sum_est_value]
-        else:
-            ngroupby = len(self.groupby_col)
-            groupby_col = [self.table.ColumnIndex(n) for n in self.groupby_col]
-            results = []
-            valid_list = []
-            value_list = []
-            valid_list = self.generateValidList(columns, valid_i_list, 0, groupby_col, valid_list, value_list)
-            self.runModelStep(valid_i_list, operators, logits, ordering, columns, masked_probs, num_samples,
-                              inp, 0, ncol - ngroupby - 1)
-            for valid_i_list, value in valid_list:
-                masked = copy.deepcopy(masked_probs)
-                prob_select = self.runModelStep(valid_i_list, operators, logits, ordering, columns,
-                                                              masked, num_samples, inp, ncol-ngroupby-1, ncol)
-                p = masked[1]
-                for ls in masked[2:]:
-                    p *= ls
-                p *= masked[0]
-
-                p_selects = prob_select.mean(dim=0)
-                vals = torch.nan_to_num(torch.as_tensor(columns[select_col].all_distinct_values, device=self.device))
-                avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy().item()
-                count_est_value = len(self.table.data) * p.mean().item()
-                sum_est_value = avg_est_value * count_est_value
-                if count_est_value > 0.5:
-                    results.append([value[0], avg_est_value, count_est_value, sum_est_value])
-            print(results)
-            return results
-
-    def runModelStep(self, valid_i_list, operators, logits, ordering, columns, masked_probs, num_samples, inp, start, end):
         # Actual progressive sampling.  Repeat:
         #   Sample next var from curr logits -> fill in next var
         #   Forward pass -> curr logits
         # torch.set_printoptions(profile="full")
-        ncol = len(columns)
-        prob_select = None
-        for i in range(start, end):
+        for i in range(0, ncol):
             natural_idx = i if ordering is None else ordering[i]
             # If wildcard enabled, 'logits' wasn't assigned last iter.
             if not self.shortcircuit or operators[natural_idx] is not None:
@@ -445,10 +415,24 @@ class ProgressiveSampling(CardEst):
                         logits = self.traced_fwd(inp)
                     else:
                         logits = self.model.forward_with_encoded_input(inp)
-        return prob_select
+        p = masked_probs[1]
+        for ls in masked_probs[2:]:
+            p *= ls
+
+        p *= masked_probs[0]
+
+        p_selects = prob_select.mean(dim=0)
+        vals = torch.nan_to_num(torch.as_tensor(columns[select_col].all_distinct_values, device=self.device))
+        avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy().item()
+        count_est_value = len(self.table.data) * p.mean().item()
+        sum_est_value = avg_est_value * count_est_value
+        return [avg_est_value, count_est_value, sum_est_value]
 
 
-    def Query(self, columns, operators, vals):
+
+    def Query(self, agg_col, columns, operators, vals, groupby_col):
+        self.agg_col = agg_col
+        self.groupby_col = groupby_col
         # Massages queries into natural order.
         columns, operators, vals = FillInUnqueriedColumns(
             self.table, columns, operators, vals)

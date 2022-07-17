@@ -45,7 +45,7 @@ parser.add_argument('--inference-opts',
                     action='store_true',
                     help='Tracing optimization for better latency.')
 
-parser.add_argument('--num-queries', type=int, default=20, help='# queries.')
+parser.add_argument('--num_queries', type=int, default=20, help='# queries.')
 parser.add_argument('--dataset', type=str, default='dmv-tiny', help='Dataset.')
 parser.add_argument('--col', nargs='+', help='Column names in the dataset that you want to use.')
 parser.add_argument('--err-csv',
@@ -173,7 +173,7 @@ def InvertOrder(order):
     return inv_ordering
 
 
-def MakeTable(groupby_col, agg_col):
+def MakeTable():
     # assert args.dataset in ['dmv-tiny', 'dmv']
     if args.dataset == 'dmv-tiny':
         table = datasets.LoadDmv('dmv-tiny.csv')
@@ -183,7 +183,7 @@ def MakeTable(groupby_col, agg_col):
         table = datasets.LoadMyDataset(args.dataset, args.col)
     oracle_est = estimators_lib.Oracle(table)
 
-    real_result = estimators_lib.RealResult(table, groupby_col, agg_col)
+    real_result = estimators_lib.RealResult(table)
     if args.run_bn:
         return table, common.TableDataset(table), real_result
     return table, None, oracle_est, real_result
@@ -294,46 +294,53 @@ def ReportEsts(estimators):
 def GenerateRandomQuery(table):
     rng = np.random.RandomState()
     ncol = len(args.col)
-    p = [0.5, 0.3]
-    p.extend([0.2/(ncol-3)]*(ncol-3))
-    num_cols = rng.choice(range(1, ncol), size=1, p=p)[0]
-    print(num_cols)
-    col_idxs = rng.choice(ncol, replace=False, size=num_cols+1).tolist()
+    groupby_col = table.ColumnIndex('ss_store_sk')
+
+    if ncol > 4:
+        p = [0.5, 0.3]
+        p.extend([0.2/(ncol-4)]*(ncol-4))
+    elif ncol == 4:
+        p = [0.6, 0.4]
+    else:
+        p = [1]
+    num_cols = rng.choice(range(2, ncol), size=1, p=p)[0]
+    all_cols = [*range(ncol)]
+    all_cols.remove(groupby_col)
+    col_idxs = rng.choice(all_cols, replace=False, size=num_cols).tolist()
     agg_col = rng.choice(col_idxs, size=1)[0]
     col_idxs.remove(agg_col)
     cols = np.take(table.columns, col_idxs)
 
     # If dom size >= 10, okay to place a range filter.
     # Otherwise, low domain size columns should be queried with equality.
-    ops = rng.choice([['<='], ['>='], ['>=', '<='], ['=']], size=num_cols, p=[0.3, 0.3, 0.3, 0.1])
+    ops = rng.choice([['<='], ['>='], ['>=', '<='], ['=']], size=num_cols-1, p=[0.3, 0.3, 0.3, 0.1])
     ops_all_eqs = ['='] * len(col_idxs)
     sensible_to_do_range = [c.DistributionSize() >= 10 for c in cols]
     ops = np.where(sensible_to_do_range, ops, ops_all_eqs)
     vals = []
     for i, op in enumerate(ops):
         if op == ['>=', '<=']:
-            val = rng.choice(cols[col_idxs[i]].all_distinct_values, size=2)
+            val = rng.choice(table.columns[col_idxs[i]].all_distinct_values, size=2).tolist()
             val.sort()
             vals.append(val)
         else:
-            val = rng.choice(cols[col_idxs[i]].all_distinct_values, size=1)
+            val = rng.choice(table.columns[col_idxs[i]].all_distinct_values, size=1).tolist()
             vals.append(val)
 
     query = {
-        "agg_col": agg_col,
-        "where_col": col_idxs,
+        "agg_col": table.columns[agg_col].Name(),
+        "where_col": cols,
         "where_ops": ops,
-        "where_val": vals,
-        "groupby_col": None
+        "where_val": vals
     }
     print(query)
     return query
 
 
-def RunSingleQuery(est, real, where_col, where_ops, where_val):
+def RunSingleQuery(est, real, agg_col, where_col, where_ops, where_val, groupby_col):
     # Actual.
-    real_result = real.Query(where_col, where_ops, where_val)
-    est_result = est.Query(where_col, where_ops, where_val)
+    real_result = real.Query(agg_col, where_col, where_ops, where_val, groupby_col)
+    est_result = est.Query(agg_col, where_col, where_ops, where_val, groupby_col)
     return est_result, real_result
 
 
@@ -467,9 +474,8 @@ def MakeBnEstimators():
 
 
 def MakeMade(scale, cols_to_train, seed, fixed_ordering=None):
-    if args.inv_order:
-        print('Inverting order!')
-        fixed_ordering = InvertOrder(fixed_ordering)
+    print('Inverting order!')
+    ordering = InvertOrder(fixed_ordering)
 
     model = made.MADE(
         nin=len(cols_to_train),
@@ -484,7 +490,7 @@ def MakeMade(scale, cols_to_train, seed, fixed_ordering=None):
         do_direct_io_connections=args.direct_io,
         natural_ordering=False if seed is not None and seed != 0 else True,
         residual_connections=args.residual,
-        fixed_ordering=fixed_ordering,
+        fixed_ordering=ordering,
         column_masking=args.column_masking,
     ).to(DEVICE)
 
@@ -570,7 +576,8 @@ def saveResults(est, real, est_result, real_result, query, filename):
             'sum_err': err(est_result[2], real_result[2]),
             'query_dur_ms_est': est.query_dur_ms[0],
             'query_dur_ms_real': real.query_dur_ms[0],
-            'query_dur_ms_err': err(est.query_dur_ms[0], real.query_dur_ms[0])
+            'query_dur_ms_err': err(est.query_dur_ms[0], real.query_dur_ms[0]),
+
         }
 
     else:
@@ -617,34 +624,36 @@ def saveResults(est, real, est_result, real_result, query, filename):
         outfile.write(json_object)
 
 
-def Main():
-    query = None
-    if args.query:
-        agg_col = args.agg_col
-        where_str = ''
-        if args.where_col is not None:
-            where_col = ast.literal_eval(args.where_col)
-            where_ops = ast.literal_eval(args.where_ops)
-            where_val = ast.literal_eval(args.where_val)
-            where_str = ' where '
-            for i, col in enumerate(where_col):
-                if i != 0:
-                    where_str += 'AND'
-                where_str += where_col[i]
-                for j, op in enumerate(where_ops[i]):
-                    where_str += str(where_ops[i][j]) + str(where_val[i][j])
-        else:
-            where_col = where_ops = where_val = None
-        query = '\'select ' + agg_col + ' from ' + args.dataset + where_str
-        if args.groupby_col is not None:
-            groupby_col = ast.literal_eval(args.groupby_col)
-            query += ' group by '
-            for col in groupby_col:
-                query += str(col)
-        else:
-            groupby_col = None
-        query += '\''
-        logging.info('query ' + query)
+def toQuery(agg_col, where_col, where_ops, where_val, groupby_col=None):
+    where_str = ' WHERE '
+    for i, col in enumerate(where_col):
+        if i != 0:
+            where_str += ' AND '
+        where_str += where_col[i]
+        for j, op in enumerate(where_ops[i]):
+            where_str += str(where_ops[i][j]) + str(where_val[i][j])
+    query = '\'SELECT ' + agg_col + ' FROM ' + args.dataset + where_str
+    if groupby_col is not None:
+        query += ' GROUP BY '
+        for col in groupby_col:
+            query += str(col)
+    query += '\''
+    return query
+
+
+def generateOrder(table, agg_col, groupby_col):
+    agg_idx = table.ColumnIndex(agg_col)
+    ncol = len(table.columns)
+    order = [*range(ncol)]
+    if groupby_col is not None:
+        groupby_idx = [table.ColumnIndex(n) for n in groupby_col]
+        order = [i for i in order if i not in groupby_idx]
+        order.extend(groupby_idx)
+    order.remove(agg_idx)
+    order.append(agg_idx)
+    return order
+
+def loadEstimators(table, order):
     all_ckpts = glob.glob('./models/{}'.format(args.glob))
     if args.blacklist:
         all_ckpts = [ckpt for ckpt in all_ckpts if args.blacklist not in ckpt]
@@ -653,12 +662,6 @@ def Main():
     oracle_cards = LoadOracleCardinalities()
     print('ckpts', selected_ckpts)
 
-    if not args.run_bn:
-        # OK to load tables now
-        table, train_data, oracle_est, real = MakeTable(groupby_col, agg_col)
-        cols_to_train = table.columns
-
-    query = GenerateRandomQuery(table)
     Ckpt = collections.namedtuple(
         'Ckpt', 'epoch model_bits bits_gap path loaded_model seed')
     parsed_ckpts = []
@@ -677,11 +680,6 @@ def Main():
         data_bits = float(z.group(2))
         seed = int(z.group(3))
         bits_gap = model_bits - data_bits
-
-        order = None
-
-        if args.order is not None:
-            order = list(args.order)
 
         if args.heads > 0:
             model = MakeTransformer(cols_to_train=table.columns,
@@ -727,8 +725,6 @@ def Main():
             estimators_lib.ProgressiveSampling(c.loaded_model,
                                                table,
                                                args.psample,
-                                               groupby_col,
-                                               agg_col,
                                                device=DEVICE,
                                                shortcircuit=args.column_masking)
             for c in parsed_ckpts
@@ -759,29 +755,74 @@ def Main():
                 estimators_lib.MaxDiffHistogram(table, args.maxdiff_limit))
 
         # Other estimators can be appended as well.
+
+        # if len(estimators):
+        #     RunN(table,
+        #          cols_to_train,
+        #          estimators,
+        #          rng=np.random.RandomState(),
+        #          num=args.num_queries,
+        #          log_every=1,
+        #          num_filters=None,
+        #          oracle_cards=oracle_cards,
+        #          oracle_est=oracle_est)
+    return estimators
+
+def Main():
+    if args.query:
+        agg_col = args.agg_col
+        if args.where_col is not None:
+            where_col = ast.literal_eval(args.where_col)
+            where_ops = ast.literal_eval(args.where_ops)
+            where_val = ast.literal_eval(args.where_val)
+        else:
+            where_col = where_ops = where_val = None
+        if args.groupby_col is not None:
+            groupby_col = ast.literal_eval(args.groupby_col)
+        else:
+            groupby_col = None
+        querystr = toQuery(agg_col, where_col, where_ops, where_val, groupby_col)
+        if not args.run_bn:
+            # OK to load tables now
+            table, train_data, oracle_est, real = MakeTable()
+        order = generateOrder(table, agg_col, groupby_col)
+        estimators = loadEstimators(table, order)
         where_col = [table.ColumnIndex(i) for i in where_col]
         where_col = [table.columns[i] for i in where_col]
-        print('where_col', where_col)
-        if args.query:
-            est_result, real_result = RunSingleQuery(estimators[0], real, where_col, where_ops, where_val)
-        else:
-            if len(estimators):
-                RunN(table,
-                     cols_to_train,
-                     estimators,
-                     rng=np.random.RandomState(),
-                     num=args.num_queries,
-                     log_every=1,
-                     num_filters=None,
-                     oracle_cards=oracle_cards,
-                     oracle_est=oracle_est)
+
+        logging.info('query ' + querystr)
+        est_result, real_result = RunSingleQuery(estimators[0], real, agg_col, where_col, where_ops, where_val,
+                                                 groupby_col)
+        if args.save_result is not None:
+            saveResults(estimators[0], real, est_result, real_result, querystr, args.save_result)
+            print('...Done, result:', args.save_result)
+            logging.info('write results in ' + args.save_result)
+    else:
+        if not args.run_bn:
+            # OK to load tables now
+            table, train_data, oracle_est, real = MakeTable()
+        cnt = 0
+        for i in range(args.num_queries):
+            query = GenerateRandomQuery(table)
+            groupby_col = [None, ['ss_store_sk']]
+            for g in groupby_col:
+                order = generateOrder(table, query['agg_col'], g)
+                print(order)
+                estimators = loadEstimators(table, order)
+                est_result, real_result = RunSingleQuery(estimators[0], real, query['agg_col'], query['where_col'],
+                                                         query['where_ops'], query['where_val'], g)
+
+                querystr = toQuery(query['agg_col'], [c.Name() for c in query['where_col']],
+                                   query['where_ops'], query['where_val'], g)
+                if args.save_result is not None:
+                    save_result = "results/1G/query" + str(cnt) + '.json'
+                    saveResults(estimators[0], real, est_result, real_result, querystr, save_result)
+                    print('...Done, result:', save_result)
+                    logging.info('write results in ' + save_result)
+                    cnt += 1
 
     # SaveEstimators(args.err_csv, estimators)
     # print('...Done, result:', args.err_csv)
-    if args.save_result is not None:
-        saveResults(est, real, est_result, real_result, query, args.save_result)
-        print('...Done, result:', args.save_result)
-        logging.info('write results in ' + args.save_result)
 
 
 if __name__ == '__main__':

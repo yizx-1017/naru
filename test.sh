@@ -1,6 +1,6 @@
 #!/bin/bash
 rm -f models/*
-declare -a DATASET="store_sales_1G.csv"
+declare -a DATASET="ss_1k.csv"
 python3 train_model.py \
 --dataset=$DATASET \
 --col 'ss_sold_date_sk' 'ss_store_sk' 'ss_sales_price' 'ss_quantity' \
@@ -9,6 +9,13 @@ python3 train_model.py \
 --order 0 1 2 3 --inv_order
 
 mkdir -p results/1G
+python eval_model.py \
+--glob=$DATASET* \
+--dataset=$DATASET \
+--col 'ss_sold_date_sk' 'ss_store_sk' 'ss_sales_price' 'ss_quantity' \
+--residual --layers=5 --fc-hiddens=256 --direct-io \
+--num_queries=20
+
 python eval_model.py \
 --glob=$DATASET* \
 --dataset=$DATASET \
