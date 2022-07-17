@@ -307,6 +307,7 @@ def GenerateRandomQuery(table):
     all_cols = [*range(ncol)]
     all_cols.remove(groupby_col)
     col_idxs = rng.choice(all_cols, replace=False, size=num_cols).tolist()
+    col_idxs.sort()
     agg_col = rng.choice(col_idxs, size=1)[0]
     col_idxs.remove(agg_col)
     cols = np.take(table.columns, col_idxs)
