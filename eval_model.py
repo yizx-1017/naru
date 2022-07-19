@@ -814,18 +814,24 @@ def Main():
         cnt = 0
         for i in range(args.num_queries):
             query = GenerateRandomQuery(table)
+            agg_col = query['agg_col']
+            where_col = query['where_col']
+            where_ops = query['where_ops']
+            where_val = query['where_val']
             groupby_col = [None, ['ss_store_sk']]
             for g in groupby_col:
-                # order = generateOrder(table, query['agg_col'], g)
+                change_order = generateOrder(table, query['agg_col'], g)
                 orders = list(itertools.permutations([0, 1, 2, 3]))
                 for order in orders:
+                    if order[-1] != change_order[-1]:
+                        agg_col = table.columns[order[-1]].Name()
                     print(order)
                     estimators = loadEstimators(table, order)
-                    est_result, real_result = RunSingleQuery(estimators[0], real, query['agg_col'], query['where_col'],
-                                                             query['where_ops'], query['where_val'], g)
+                    est_result, real_result = RunSingleQuery(estimators[0], real, agg_col, where_col,
+                                                             where_ops, where_val, g)
 
-                    querystr = toQuery(query['agg_col'], [c.Name() for c in query['where_col']],
-                                       query['where_ops'], query['where_val'], g)
+                    querystr = toQuery(agg_col, [c.Name() for c in where_col],
+                                       where_ops, where_val, g)
                     if args.save_result is not None:
                         save_result = "results/test_order/query" + str(cnt) + '.json'
                         saveResults(estimators[0], real, est_result, real_result, querystr, order, save_result)
