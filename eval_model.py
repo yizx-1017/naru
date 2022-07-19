@@ -3,6 +3,7 @@ import argparse
 import collections
 import csv
 import glob
+import itertools
 import json
 import logging
 import os
@@ -65,8 +66,8 @@ parser.add_argument('--psample',
 parser.add_argument(
     '--column-masking',
     action='store_true',
-    help='Turn on wildcard skipping.  Requires checkpoints be trained with '\
-    'column masking.')
+    help='Turn on wildcard skipping.  Requires checkpoints be trained with ' \
+         'column masking.')
 parser.add_argument('--order',
                     nargs='+',
                     type=int,
@@ -83,11 +84,11 @@ parser.add_argument('--direct-io', action='store_true', help='Do direct IO?')
 parser.add_argument(
     '--inv_order',
     action='store_true',
-    help='Set this flag iff using MADE and specifying --order. Flag --order'\
-    'lists natural indices, e.g., [0 2 1] means variable 2 appears second.'\
-    'MADE, however, is implemented to take in an argument the inverse '\
-    'semantics (element i indicates the position of variable i).  Transformer'\
-    ' does not have this issue and thus should not have this flag on.')
+    help='Set this flag iff using MADE and specifying --order. Flag --order' \
+         'lists natural indices, e.g., [0 2 1] means variable 2 appears second.' \
+         'MADE, however, is implemented to take in an argument the inverse ' \
+         'semantics (element i indicates the position of variable i).  Transformer' \
+         ' does not have this issue and thus should not have this flag on.')
 parser.add_argument(
     '--input-encoding',
     type=str,
@@ -98,15 +99,15 @@ parser.add_argument(
     type=str,
     default='one_hot',
     help='Iutput encoding for MADE/ResMADE, {one_hot, embed}.  If embed, '
-    'then input encoding should be set to embed as well.')
+         'then input encoding should be set to embed as well.')
 
 # Transformer.
 parser.add_argument(
     '--heads',
     type=int,
     default=0,
-    help='Transformer: num heads.  A non-zero value turns on Transformer'\
-    ' (otherwise MADE/ResMADE).'
+    help='Transformer: num heads.  A non-zero value turns on Transformer' \
+         ' (otherwise MADE/ResMADE).'
 )
 parser.add_argument('--blocks',
                     type=int,
@@ -291,6 +292,7 @@ def ReportEsts(estimators):
         v = max(v, np.max(est.errs))
     return v
 
+
 def GenerateRandomQuery(table):
     rng = np.random.RandomState()
     ncol = len(args.col)
@@ -298,7 +300,7 @@ def GenerateRandomQuery(table):
 
     if ncol > 4:
         p = [0.5, 0.3]
-        p.extend([0.2/(ncol-4)]*(ncol-4))
+        p.extend([0.2 / (ncol - 4)] * (ncol - 4))
     elif ncol == 4:
         p = [0.6, 0.4]
     else:
@@ -314,7 +316,7 @@ def GenerateRandomQuery(table):
 
     # If dom size >= 10, okay to place a range filter.
     # Otherwise, low domain size columns should be queried with equality.
-    ops = rng.choice([['<='], ['>='], ['>=', '<='], ['=']], size=num_cols-1, p=[0.3, 0.3, 0.3, 0.1])
+    ops = rng.choice([['<='], ['>='], ['>=', '<='], ['=']], size=num_cols - 1, p=[0.3, 0.3, 0.3, 0.1])
     ops_all_eqs = ['='] * len(col_idxs)
     sensible_to_do_range = [c.DistributionSize() >= 10 for c in cols]
     ops = np.where(sensible_to_do_range, ops, ops_all_eqs)
@@ -659,6 +661,7 @@ def generateOrder(table, agg_col, groupby_col):
     order.append(agg_idx)
     return order
 
+
 def loadEstimators(table, order):
     all_ckpts = glob.glob('./models/{}'.format(args.glob))
     if args.blacklist:
@@ -774,6 +777,7 @@ def loadEstimators(table, order):
         #          oracle_est=oracle_est)
     return estimators
 
+
 def Main():
     if args.query:
         agg_col = args.agg_col
@@ -812,20 +816,22 @@ def Main():
             query = GenerateRandomQuery(table)
             groupby_col = [None, ['ss_store_sk']]
             for g in groupby_col:
-                order = generateOrder(table, query['agg_col'], g)
-                print(order)
-                estimators = loadEstimators(table, order)
-                est_result, real_result = RunSingleQuery(estimators[0], real, query['agg_col'], query['where_col'],
-                                                         query['where_ops'], query['where_val'], g)
+                # order = generateOrder(table, query['agg_col'], g)
+                orders = list(itertools.permutations([0, 1, 2, 3]))
+                for order in orders:
+                    print(order)
+                    estimators = loadEstimators(table, order)
+                    est_result, real_result = RunSingleQuery(estimators[0], real, query['agg_col'], query['where_col'],
+                                                             query['where_ops'], query['where_val'], g)
 
-                querystr = toQuery(query['agg_col'], [c.Name() for c in query['where_col']],
-                                   query['where_ops'], query['where_val'], g)
-                if args.save_result is not None:
-                    save_result = "results/1G/query" + str(cnt) + '.json'
-                    saveResults(estimators[0], real, est_result, real_result, querystr, order, save_result)
-                    print('...Done, result:', save_result)
-                    logging.info('write results in ' + save_result)
-                    cnt += 1
+                    querystr = toQuery(query['agg_col'], [c.Name() for c in query['where_col']],
+                                       query['where_ops'], query['where_val'], g)
+                    if args.save_result is not None:
+                        save_result = "results/test_order/query" + str(cnt) + '.json'
+                        saveResults(estimators[0], real, est_result, real_result, querystr, order, save_result)
+                        print('...Done, result:', save_result)
+                        logging.info('write results in ' + save_result)
+                        cnt += 1
 
     # SaveEstimators(args.err_csv, estimators)
     # print('...Done, result:', args.err_csv)
