@@ -523,8 +523,8 @@ def ReportModel(model, blacklist=None):
             ps.append(np.prod(p.size()))
     num_params = sum(ps)
     mb = num_params * 4 / 1024 / 1024
-    print('Number of model parameters: {} (~= {:.1f}MB)'.format(num_params, mb))
-    print(model)
+    # print('Number of model parameters: {} (~= {:.1f}MB)'.format(num_params, mb))
+    # print(model)
     return mb
 
 
@@ -826,12 +826,13 @@ def Main():
                     if order[-1] != change_order[-1]:
                         agg_col = table.columns[order[-1]].Name()
                     print(order)
+                    querystr = toQuery(agg_col, [c.Name() for c in where_col],
+                                       where_ops, where_val, g)
+                    print(querystr)
                     estimators = loadEstimators(table, order)
                     est_result, real_result = RunSingleQuery(estimators[0], real, agg_col, where_col,
                                                              where_ops, where_val, g)
 
-                    querystr = toQuery(agg_col, [c.Name() for c in where_col],
-                                       where_ops, where_val, g)
                     if args.save_result is not None:
                         save_result = "results/test_order/query" + str(cnt) + '.json'
                         saveResults(estimators[0], real, est_result, real_result, querystr, order, save_result)
