@@ -347,7 +347,7 @@ def RunSingleQuery(est, est_avg, real, agg_col, where_col, where_ops, where_val,
     est_result_avg = est_avg.Query(agg_col, where_col, where_ops, where_val, groupby_col, count=False)
     est_result_sum = est_result_count*est_result_avg
     print(est_result_count, est_result_avg)
-    est_result = [est_result_count, est_result_avg, est_result_sum]
+    est_result = [est_result_avg, est_result_count, est_result_sum]
     return est_result, real_result
 
 
