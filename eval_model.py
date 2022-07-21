@@ -698,7 +698,6 @@ def loadEstimators(table, order, natural_ordering):
         if args.heads > 0:
             model = MakeTransformer(cols_to_train=table.columns,
                                     fixed_ordering=order,
-                                    natural_ordering=natural_ordering,
                                     seed=seed)
         else:
             # if args.dataset in ['dmv-tiny', 'dmv']:
@@ -706,7 +705,8 @@ def loadEstimators(table, order, natural_ordering):
                 scale=args.fc_hiddens,
                 cols_to_train=table.columns,
                 seed=seed,
-                natural_ordering=True
+                fixed_ordering=order,
+                natural_ordering=natural_ordering
             )
             # else:
             #     assert False, args.dataset
