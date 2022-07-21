@@ -667,7 +667,7 @@ def generateOrder(table, agg_col, groupby_col):
     return order
 
 
-def loadEstimators(table, order):
+def loadEstimators(table, order, natural_ordering):
     all_ckpts = glob.glob('./models/{}'.format(args.glob))
     if args.blacklist:
         all_ckpts = [ckpt for ckpt in all_ckpts if args.blacklist not in ckpt]
@@ -698,6 +698,7 @@ def loadEstimators(table, order):
         if args.heads > 0:
             model = MakeTransformer(cols_to_train=table.columns,
                                     fixed_ordering=order,
+                                    natural_ordering=natural_ordering,
                                     seed=seed)
         else:
             # if args.dataset in ['dmv-tiny', 'dmv']:
@@ -706,13 +707,6 @@ def loadEstimators(table, order):
                 cols_to_train=table.columns,
                 seed=seed,
                 natural_ordering=True
-            )
-            model_avg = MakeMade(
-                scale=args.fc_hiddens,
-                cols_to_train=table.columns,
-                seed=seed,
-                fixed_ordering=order,
-                natural_ordering=False
             )
             # else:
             #     assert False, args.dataset
@@ -731,13 +725,6 @@ def loadEstimators(table, order):
                  model_bits=model_bits,
                  bits_gap=bits_gap,
                  loaded_model=model,
-                 seed=seed))
-        parsed_ckpts.append(
-            Ckpt(path=s,
-                 epoch=None,
-                 model_bits=model_bits,
-                 bits_gap=bits_gap,
-                 loaded_model=model_avg,
                  seed=seed))
 
     # Estimators to run.
@@ -844,13 +831,14 @@ def Main():
                 querystr = toQuery(agg_col, [c.Name() for c in where_col],
                                    where_ops, where_val, g)
                 print(querystr)
-                estimators = loadEstimators(table, order)
-                est_result, real_result = RunSingleQuery(estimators[0], estimators[1], real, agg_col, where_col,
+                estimators1 = loadEstimators(table, order, natural_ordering=True)[0]
+                estimators2 = loadEstimators(table, order, natural_ordering=False)[0]
+                est_result, real_result = RunSingleQuery(estimators1, estimators2, real, agg_col, where_col,
                                                              where_ops, where_val, g)
 
                 if args.save_result is not None:
                     save_result = "results/1G/query" + str(cnt) + '.json'
-                    saveResults(estimators[0], real, est_result, real_result, querystr, order, save_result)
+                    saveResults(estimators1, real, est_result, real_result, querystr, order, save_result)
                     print('...Done, result:', save_result)
                     logging.info('write results in ' + save_result)
                     cnt += 1

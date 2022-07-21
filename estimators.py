@@ -433,7 +433,7 @@ class ProgressiveSampling(CardEst):
 
 
 
-    def Query(self, agg_col, columns, operators, vals, groupby_col, count):
+    def Query(self, agg_col, columns, operators, vals, groupby_col, count=True):
         self.agg_col = agg_col
         self.groupby_col = groupby_col
         # Massages queries into natural order.
