@@ -705,13 +705,13 @@ def loadEstimators(table, order):
                 scale=args.fc_hiddens,
                 cols_to_train=table.columns,
                 seed=seed,
-                fixed_ordering=order,
                 natural_ordering=True
             )
             model_avg = MakeMade(
                 scale=args.fc_hiddens,
                 cols_to_train=table.columns,
                 seed=seed,
+                fixed_ordering=order,
                 natural_ordering=False
             )
             # else:
