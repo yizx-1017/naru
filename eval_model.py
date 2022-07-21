@@ -705,7 +705,7 @@ def loadEstimators(table, order, natural_ordering):
                 scale=args.fc_hiddens,
                 cols_to_train=table.columns,
                 seed=seed,
-                fixed_ordering=order if natural_ordering else None,
+                fixed_ordering=order if not natural_ordering else None,
                 natural_ordering=natural_ordering
             )
             # else:
