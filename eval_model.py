@@ -343,8 +343,8 @@ def GenerateRandomQuery(table):
 def RunSingleQuery(est, est_avg, real, agg_col, where_col, where_ops, where_val, groupby_col):
     # Actual.
     real_result = real.Query(agg_col, where_col, where_ops, where_val, groupby_col)
-    est_result_count = est.Query(agg_col, where_col, where_ops, where_val, groupby_col)[1]
-    est_result_avg = est_avg.Query(agg_col, where_col, where_ops, where_val, groupby_col)[0]
+    est_result_count = est.Query(agg_col, where_col, where_ops, where_val, groupby_col, count=True)
+    est_result_avg = est_avg.Query(agg_col, where_col, where_ops, where_val, groupby_col, count=False)
     est_result_sum = est_result_count*est_result_avg
     print(est_result_count, est_result_avg)
     est_result = [est_result_count, est_result_avg, est_result_sum]
@@ -498,7 +498,7 @@ def MakeMade(scale, cols_to_train, seed, fixed_ordering=None, natural_ordering=F
         do_direct_io_connections=args.direct_io,
         natural_ordering=natural_ordering,
         residual_connections=args.residual,
-        fixed_ordering=ordering,
+        fixed_ordering=ordering if fixed_ordering else None,
         column_masking=args.column_masking,
     ).to(DEVICE)
 
@@ -837,7 +837,7 @@ def Main():
             where_col = query['where_col']
             where_ops = query['where_ops']
             where_val = query['where_val']
-            groupby_col = [None, ['ss_store_sk']]
+            groupby_col = [None]
             for g in groupby_col:
                 order = generateOrder(table, agg_col, g)
                 print(order)

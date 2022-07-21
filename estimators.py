@@ -247,7 +247,8 @@ class ProgressiveSampling(CardEst):
                   columns,
                   operators,
                   vals,
-                  inp=None):
+                  inp=None,
+                  count=True):
         ncols = len(columns)
         logits = self.init_logits
         select_col = self.table.ColumnIndex(self.agg_col)
@@ -305,7 +306,7 @@ class ProgressiveSampling(CardEst):
 
         if self.groupby_col is None:
             result = self.runModel(valid_i_list, operators, logits,
-                                   ordering, columns, inp, select_col, num_samples)
+                                   ordering, columns, inp, select_col, num_samples, count)
             return result
         else:
             results = []
@@ -315,7 +316,7 @@ class ProgressiveSampling(CardEst):
             valid_list = self.generateValidList(columns, valid_i_list, 0, groupby_col, valid_list, value_list)
             num_samples = num_samples // len(valid_list)
             for valid_i_list, value in valid_list:
-                result = self.runModel(valid_i_list, operators, logits, ordering, columns, inp, select_col, num_samples)
+                result = self.runModel(valid_i_list, operators, logits, ordering, columns, inp, select_col, num_samples, count)
                 if result is not None and result[1] > 0.5:
                     results.append(value + result)
             return results
@@ -334,7 +335,7 @@ class ProgressiveSampling(CardEst):
         else:
             return [(valid_i_list, value_list)]
 
-    def runModel(self, valid_i_list, operators, logits, ordering, columns, inp, select_col, num_samples):
+    def runModel(self, valid_i_list, operators, logits, ordering, columns, inp, select_col, num_samples, count):
         inp = self.inp[:num_samples]
         masked_probs = []
         ncol = len(columns)
@@ -421,16 +422,18 @@ class ProgressiveSampling(CardEst):
 
         p *= masked_probs[0]
 
-        p_selects = prob_select.mean(dim=0)
-        vals = torch.nan_to_num(torch.as_tensor(columns[select_col].all_distinct_values, device=self.device))
-        avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy().item()
-        count_est_value = len(self.table.data) * p.mean().item()
-        sum_est_value = avg_est_value * count_est_value
-        return [avg_est_value, count_est_value, sum_est_value]
+        if count:
+            count_est_value = len(self.table.data) * p.mean().item()
+            return count_est_value
+        else:
+            p_selects = prob_select.mean(dim=0)
+            vals = torch.nan_to_num(torch.as_tensor(columns[select_col].all_distinct_values, device=self.device))
+            avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy().item()
+            return avg_est_value
 
 
 
-    def Query(self, agg_col, columns, operators, vals, groupby_col):
+    def Query(self, agg_col, columns, operators, vals, groupby_col, count):
         self.agg_col = agg_col
         self.groupby_col = groupby_col
         # Massages queries into natural order.
@@ -471,7 +474,8 @@ class ProgressiveSampling(CardEst):
                     columns,
                     operators,
                     vals,
-                    inp=inp_buf)
+                    inp=inp_buf,
+                    count=count)
                 self.OnEnd()
                 return res
                 # return np.ceil(p * self.cardinality).astype(dtype=np.int32,
