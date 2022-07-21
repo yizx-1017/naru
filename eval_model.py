@@ -340,10 +340,14 @@ def GenerateRandomQuery(table):
     return query
 
 
-def RunSingleQuery(est, real, agg_col, where_col, where_ops, where_val, groupby_col):
+def RunSingleQuery(est, est_avg, real, agg_col, where_col, where_ops, where_val, groupby_col):
     # Actual.
     real_result = real.Query(agg_col, where_col, where_ops, where_val, groupby_col)
-    est_result = est.Query(agg_col, where_col, where_ops, where_val, groupby_col)
+    est_result_count = est.Query(agg_col, where_col, where_ops, where_val, groupby_col)[1]
+    est_result_avg = est_avg.Query(agg_col, where_col, where_ops, where_val, groupby_col)[0]
+    est_result_sum = est_result_count*est_result_avg
+    print(est_result_count, est_result_avg)
+    est_result = [est_result_count, est_result_avg, est_result_sum]
     return est_result, real_result
 
 
@@ -476,9 +480,10 @@ def MakeBnEstimators():
     return estimators, table, real_result
 
 
-def MakeMade(scale, cols_to_train, seed, fixed_ordering=None):
-    print('Inverting order!')
-    ordering = InvertOrder(fixed_ordering)
+def MakeMade(scale, cols_to_train, seed, fixed_ordering=None, natural_ordering=False):
+    if fixed_ordering:
+        print('Inverting order!')
+        ordering = InvertOrder(fixed_ordering)
 
     model = made.MADE(
         nin=len(cols_to_train),
@@ -491,7 +496,7 @@ def MakeMade(scale, cols_to_train, seed, fixed_ordering=None):
         embed_size=32,
         seed=seed,
         do_direct_io_connections=args.direct_io,
-        natural_ordering=False if seed is not None and seed != 0 else True,
+        natural_ordering=natural_ordering,
         residual_connections=args.residual,
         fixed_ordering=ordering,
         column_masking=args.column_masking,
@@ -701,6 +706,13 @@ def loadEstimators(table, order):
                 cols_to_train=table.columns,
                 seed=seed,
                 fixed_ordering=order,
+                natural_ordering=True
+            )
+            model_avg = MakeMade(
+                scale=args.fc_hiddens,
+                cols_to_train=table.columns,
+                seed=seed,
+                natural_ordering=False
             )
             # else:
             #     assert False, args.dataset
@@ -719,6 +731,13 @@ def loadEstimators(table, order):
                  model_bits=model_bits,
                  bits_gap=bits_gap,
                  loaded_model=model,
+                 seed=seed))
+        parsed_ckpts.append(
+            Ckpt(path=s,
+                 epoch=None,
+                 model_bits=model_bits,
+                 bits_gap=bits_gap,
+                 loaded_model=model_avg,
                  seed=seed))
 
     # Estimators to run.
@@ -820,25 +839,21 @@ def Main():
             where_val = query['where_val']
             groupby_col = [None, ['ss_store_sk']]
             for g in groupby_col:
-                change_order = generateOrder(table, query['agg_col'], g)
-                orders = list(itertools.permutations([0, 1, 2, 3]))
-                for order in orders:
-                    if order[-1] != change_order[-1]:
-                        agg_col = table.columns[order[-1]].Name()
-                    print(order)
-                    querystr = toQuery(agg_col, [c.Name() for c in where_col],
-                                       where_ops, where_val, g)
-                    print(querystr)
-                    estimators = loadEstimators(table, order)
-                    est_result, real_result = RunSingleQuery(estimators[0], real, agg_col, where_col,
+                order = generateOrder(table, agg_col, g)
+                print(order)
+                querystr = toQuery(agg_col, [c.Name() for c in where_col],
+                                   where_ops, where_val, g)
+                print(querystr)
+                estimators = loadEstimators(table, order)
+                est_result, real_result = RunSingleQuery(estimators[0], estimators[1], real, agg_col, where_col,
                                                              where_ops, where_val, g)
 
-                    if args.save_result is not None:
-                        save_result = "results/test_order/query" + str(cnt) + '.json'
-                        saveResults(estimators[0], real, est_result, real_result, querystr, order, save_result)
-                        print('...Done, result:', save_result)
-                        logging.info('write results in ' + save_result)
-                        cnt += 1
+                if args.save_result is not None:
+                    save_result = "results/1G/query" + str(cnt) + '.json'
+                    saveResults(estimators[0], real, est_result, real_result, querystr, order, save_result)
+                    print('...Done, result:', save_result)
+                    logging.info('write results in ' + save_result)
+                    cnt += 1
 
     # SaveEstimators(args.err_csv, estimators)
     # print('...Done, result:', args.err_csv)
