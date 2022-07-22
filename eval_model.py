@@ -64,7 +64,7 @@ parser.add_argument('--psample',
                     default=2000,
                     help='# of progressive samples to use per query.')
 parser.add_argument(
-    '--column-masking',
+    '--column_masking',
     action='store_true',
     help='Turn on wildcard skipping.  Requires checkpoints be trained with ' \
          'column masking.')
