@@ -284,7 +284,7 @@ class ProgressiveSampling(CardEst):
         if self.shortcircuit:
             for i in range(ncols):
                 natural_idx = i if ordering is None else ordering[i]
-                if operators[natural_idx] is None and natural_idx != ncols - 1:
+                if operators[natural_idx] is None and i != ncols - 1:
                     if natural_idx == 0:
                         self.model.EncodeInput(
                             None,
@@ -403,7 +403,7 @@ class ProgressiveSampling(CardEst):
 
                 # Actual forward pass.
                 next_natural_idx = i + 1 if ordering is None else ordering[i + 1]
-                if self.shortcircuit and operators[next_natural_idx] is None:
+                if self.shortcircuit and operators[next_natural_idx] is None and i + 1 != ncol:
                     # If next variable in line is wildcard, then don't do
                     # this forward pass.  Var 'logits' won't be accessed.
                     continue
@@ -416,11 +416,22 @@ class ProgressiveSampling(CardEst):
                         logits = self.traced_fwd(inp)
                     else:
                         logits = self.model.forward_with_encoded_input(inp)
-        p = masked_probs[1]
-        for ls in masked_probs[2:]:
-            p *= ls
+            else:
+                probs_i = torch.softmax(
+                    self.model.logits_for_col(natural_idx, logits), 1)
 
-        p *= masked_probs[0]
+                valid_i = valid_i_list[natural_idx]
+                if valid_i is not None:
+                    probs_i *= valid_i
+                prob_select = probs_i
+        if len(masked_probs) == 1:
+            p = masked_probs[0]
+        else:
+            p = masked_probs[1]
+            for ls in masked_probs[2:]:
+                p *= ls
+
+            p *= masked_probs[0]
 
         if count:
             count_est_value = len(self.table.data) * p.mean().item()
