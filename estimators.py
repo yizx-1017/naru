@@ -248,7 +248,7 @@ class ProgressiveSampling(CardEst):
                   operators,
                   vals,
                   inp=None,
-                  count=True):
+                  count=None):
         ncols = len(columns)
         logits = self.init_logits
         select_col = self.table.ColumnIndex(self.agg_col)
