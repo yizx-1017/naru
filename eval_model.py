@@ -296,27 +296,29 @@ def ReportEsts(estimators):
 def GenerateRandomQuery(table):
     rng = np.random.RandomState()
     ncol = len(args.col)
-    groupby_col = table.ColumnIndex('ss_store_sk')
-
-    if ncol > 4:
+    key_cols = [table.ColumnIndex('ss_sold_date_sk'), table.ColumnIndex('ss_store_sk')]
+    select_cols = [*range(ncol)]
+    for col in key_cols:
+        select_cols.remove(col)
+    agg_col = rng.choice(select_cols, size=1)[0]
+    all_cols = [*range(ncol)]
+    all_cols.remove(agg_col)
+    nselect = len(all_cols)
+    if nselect > 2:
         p = [0.5, 0.3]
-        p.extend([0.2 / (ncol - 4)] * (ncol - 4))
-    elif ncol == 4:
+        p.extend([0.2 / (nselect - 2)] * (nselect - 2))
+    elif nselect == 2:
         p = [0.6, 0.4]
     else:
         p = [1]
-    num_cols = rng.choice(range(2, ncol), size=1, p=p)[0]
-    all_cols = [*range(ncol)]
-    all_cols.remove(groupby_col)
+    num_cols = rng.choice(range(1, nselect+1), size=1, p=p)[0]
     col_idxs = rng.choice(all_cols, replace=False, size=num_cols).tolist()
     col_idxs.sort()
-    agg_col = rng.choice(col_idxs, size=1)[0]
-    col_idxs.remove(agg_col)
     cols = np.take(table.columns, col_idxs)
 
     # If dom size >= 10, okay to place a range filter.
     # Otherwise, low domain size columns should be queried with equality.
-    ops = rng.choice([['<='], ['>='], ['>=', '<='], ['=']], size=num_cols - 1, p=[0.3, 0.3, 0.3, 0.1])
+    ops = rng.choice([['<='], ['>='], ['>=', '<='], ['=']], size=num_cols, p=[0.3, 0.3, 0.3, 0.1])
     ops_all_eqs = ['='] * len(col_idxs)
     sensible_to_do_range = [c.DistributionSize() >= 10 for c in cols]
     ops = np.where(sensible_to_do_range, ops, ops_all_eqs)
@@ -346,7 +348,6 @@ def RunSingleQuery(est, est_avg, real, agg_col, where_col, where_ops, where_val,
     est_result_count = est.Query(agg_col, where_col, where_ops, where_val, groupby_col, count=True)
     est_result_avg = est_avg.Query(agg_col, where_col, where_ops, where_val, groupby_col, count=False)
     est_result_sum = est_result_count*est_result_avg
-    print(est_result_count, est_result_avg)
     est_result = [est_result_avg, est_result_count, est_result_sum]
     return est_result, real_result
 
