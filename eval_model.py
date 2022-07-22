@@ -802,8 +802,11 @@ def Main():
         if not args.run_bn:
             # OK to load tables now
             table, train_data, oracle_est, real = MakeTable()
-        order = generateOrder(table, agg_col, groupby_col)
-        estimators = loadEstimators(table, order)
+        if args.order:
+            order = args.order
+        else:
+            order = generateOrder(table, agg_col, groupby_col)
+        estimators = loadEstimators(table, order, natural_ordering=False)
         where_col = [table.ColumnIndex(i) for i in where_col]
         where_col = [table.columns[i] for i in where_col]
 
