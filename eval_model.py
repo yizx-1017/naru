@@ -806,18 +806,25 @@ def Main():
             order = args.order
         else:
             order = generateOrder(table, agg_col, groupby_col)
-        estimators1 = loadEstimators(table, order, natural_ordering=True)[0]
-        estimators2 = loadEstimators(table, order, natural_ordering=False)[0]
+        orders = list(itertools.permutations([0, 1, 2, 3]))
+        cnt = 0
         where_col = [table.ColumnIndex(i) for i in where_col]
         where_col = [table.columns[i] for i in where_col]
+        for order in orders:
+            order = order + (4,)
+            estimators1 = loadEstimators(table, order, natural_ordering=True)[0]
+            estimators2 = loadEstimators(table, order, natural_ordering=False)[0]
+            #where_col = [table.ColumnIndex(i) for i in where_col]
+            #where_col = [table.columns[i] for i in where_col]
 
-        logging.info('query ' + querystr)
-        est_result, real_result = RunSingleQuery(estimators1, estimators2, real, agg_col, where_col, where_ops, where_val,
-                                                 groupby_col)
-        if args.save_result is not None:
-            saveResults(estimators2, real, est_result, real_result, querystr, order, args.save_result)
-            print('...Done, result:', args.save_result)
-            logging.info('write results in ' + args.save_result)
+            logging.info('query ' + querystr)
+            est_result, real_result = RunSingleQuery(estimators1, estimators2, real, agg_col, where_col, where_ops, where_val,
+                                                     groupby_col)
+            save_result = "results/test_5/query" + str(cnt) + '.json'
+            saveResults(estimators1, real, est_result, real_result, querystr, order, save_result)
+            print('...Done, result:', save_result)
+            logging.info('write results in ' + save_result)
+            cnt += 1
     else:
         if not args.run_bn:
             # OK to load tables now
