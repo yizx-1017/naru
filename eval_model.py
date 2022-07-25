@@ -800,8 +800,6 @@ def Main():
         else:
             groupby_col = None
         querystr = toQuery(agg_col, where_col, where_ops, where_val, groupby_col)
-        where_col = [table.ColumnIndex(i) for i in where_col]
-        where_col = [table.columns[i] for i in where_col]
         if not args.run_bn:
             # OK to load tables now
             table, train_data, oracle_est, real = MakeTable()
@@ -809,21 +807,22 @@ def Main():
             order = args.order
         else:
             order = generateOrder(table, agg_col, groupby_col)
-        orders = list(itertools.permutations([0, 1, 2, 3]))
+        orders = list(itertools.permutations([0, 1, 2,3]))
         cnt = 0
 
         where_col = [table.ColumnIndex(i) for i in where_col]
         where_col = [table.columns[i] for i in where_col]
-        for order in orders:
-            order = order + (4,)
+        for o in orders:
+            order = o + (4,)
             estimators1 = loadEstimators(table, order, natural_ordering=True)[0]
             estimators2 = loadEstimators(table, order, natural_ordering=False)[0]
             
             logging.info('query ' + querystr)
             est_result, real_result = RunSingleQuery(estimators1, estimators2, real, agg_col, where_col, where_ops, where_val,
                                                      groupby_col)
-            save_result = "results/test_5/query" + str(cnt) + '.json'
-            saveResults(estimators1, real, est_result, real_result, querystr, order, save_result)
+            print(est_result, real_result)
+            save_result = "results/test_point_density_4/query" + str(cnt) + '.json'
+            #saveResults(estimators1, real, est_result, real_result, querystr, order, save_result)
             print('...Done, result:', save_result)
             logging.info('write results in ' + save_result)
             cnt += 1

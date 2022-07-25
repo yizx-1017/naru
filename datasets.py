@@ -6,7 +6,7 @@ import numpy as np
 import common
 
 
-def LoadDmv(filename='Vehicle__Snowmobile__and_Boat_Registrations.csv'):
+def LoadDmv(filename='dmv.csv'):
     csv_file = './datasets/{}'.format(filename)
     cols = [
         'Record Type', 'State', 'County', 'Body Type',
