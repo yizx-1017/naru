@@ -296,10 +296,11 @@ def ReportEsts(estimators):
 def GenerateRandomQuery(table):
     rng = np.random.RandomState()
     ncol = len(args.col)
-    key_cols = [table.ColumnIndex('ss_sold_date_sk'), table.ColumnIndex('ss_store_sk')]
     select_cols = [*range(ncol)]
-    for col in key_cols:
-        select_cols.remove(col)
+    if args.dataset == 'store_sales_1G.csv':
+        key_cols = [table.ColumnIndex('ss_sold_date_sk'), table.ColumnIndex('ss_store_sk')]
+        for col in key_cols:
+            select_cols.remove(col)
     agg_col = rng.choice(select_cols, size=1)[0]
     all_cols = [*range(ncol)]
     all_cols.remove(agg_col)
