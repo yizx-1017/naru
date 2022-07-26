@@ -810,13 +810,15 @@ def Main():
             order = args.order
         else:
             order = generateOrder(table, agg_col, groupby_col)
-        orders = list(itertools.permutations([0, 1, 2,3]))
+        ncol=len(table.columns)
+        lst = [*range(ncol)].remove(agg_col)
+        orders = list(itertools.permutations(lst))
         cnt = 0
 
         where_col = [table.ColumnIndex(i) for i in where_col]
         where_col = [table.columns[i] for i in where_col]
         for o in orders:
-            order = o + (4,)
+            order = o + (agg_col,)
             estimators1 = loadEstimators(table, order, natural_ordering=True)[0]
             estimators2 = loadEstimators(table, order, natural_ordering=False)[0]
             
