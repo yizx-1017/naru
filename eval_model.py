@@ -853,7 +853,7 @@ def Main():
                                                              where_ops, where_val, g)
 
                 if args.save_result is not None:
-                    save_result = "results/1G/query" + str(cnt) + '.json'
+                    save_result = "results/" + args.dataset + "/query" + str(cnt) + '.json'
                     saveResults(estimators1, real, est_result, real_result, querystr, order, save_result)
                     print('...Done, result:', save_result)
                     logging.info('write results in ' + save_result)
