@@ -141,7 +141,7 @@ class RealResult(CardEst):
         self.agg_col = agg_col
         self.OnStart()
         df = self.table.data
-        df['rank'] = df[self.agg_col].rank()
+        df['rank'] = df[self.agg_col].rank(method='dense')
         for i, col in enumerate(columns):
             ops = operators[i]
             col_name = col.name
@@ -439,7 +439,7 @@ class ProgressiveSampling(CardEst):
             probs_i = probs_i[:, mask]
             prob_select = torch.div(probs_i, probs_i.sum(1).reshape(-1, 1))
             p_selects = prob_select.mean(dim=0)
-            vals_idx = torch.from_numpy(np.arange(0, len(vals))).float().to(self.device)
+            vals_idx = torch.from_numpy(np.arange(1, len(vals)+1)).float().to(self.device)
             avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy().item()
             print('average index', torch.dot(p_selects, vals_idx).cpu().detach().numpy().item())
             return avg_est_value
