@@ -162,9 +162,9 @@ class RealResult(CardEst):
             groupby_df = df.groupby(self.groupby_col)[self.agg_col].agg(['mean', 'count', 'sum'])
             values = groupby_df.reset_index().values.tolist()
         else:
-            print('average index', df['rank'].mean())
-            avg_real_value = df[self.agg_col].mean()
-            count_real_value = len(df)
+            print('average index', df['rank'].dropna().mean())
+            avg_real_value = df[self.agg_col].dropna().mean()
+            count_real_value = len(df[self.agg_col].dropna())
             sum_real_value = df[self.agg_col].sum()
             values = [avg_real_value, count_real_value, sum_real_value]
         self.OnEnd()
@@ -419,7 +419,14 @@ class ProgressiveSampling(CardEst):
             else:
                 probs_i = torch.softmax(
                     self.model.logits_for_col(natural_idx, logits), 1)
+        vals = torch.as_tensor(columns[select_col].all_distinct_values, device=self.device)
+        mask = ~vals.isnan()
+        print(probs_i[0])
+        probs_i = probs_i[:, mask]
+        if self.shortcircuit and operators[select_col] is None:
+            probs_i_summed = probs_i.sum(1)
 
+            masked_probs.append(probs_i_summed)
         if len(masked_probs) == 1:
             p = masked_probs[0]
         else:
@@ -433,10 +440,10 @@ class ProgressiveSampling(CardEst):
             count_est_value = len(self.table.data) * p.mean().item()
             return count_est_value
         else:
-            vals = torch.as_tensor(columns[select_col].all_distinct_values, device=self.device)
-            mask = ~vals.isnan()
+            #vals = torch.as_tensor(columns[select_col].all_distinct_values, device=self.device)
+            #mask = ~vals.isnan()
             vals = vals[mask]
-            probs_i = probs_i[:, mask]
+            #probs_i = probs_i[:, mask]
             prob_select = torch.div(probs_i, probs_i.sum(1).reshape(-1, 1))
             p_selects = prob_select.mean(dim=0)
             vals_idx = torch.from_numpy(np.arange(1, len(vals)+1)).float().to(self.device)
