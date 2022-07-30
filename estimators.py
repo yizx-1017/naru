@@ -162,8 +162,8 @@ class RealResult(CardEst):
             groupby_df = df.groupby(self.groupby_col)[self.agg_col].agg(['mean', 'count', 'sum'])
             values = groupby_df.reset_index().values.tolist()
         else:
-            print('average index', df['rank'].dropna().mean())
-            avg_real_value = df[self.agg_col].dropna().mean()
+            # avg_real_value = df[self.agg_col].dropna().mean()
+            avg_real_value = df[self.agg_col].dropna().rank(method='dense').mean()
             count_real_value = len(df[self.agg_col].dropna())
             sum_real_value = df[self.agg_col].sum()
             values = [avg_real_value, count_real_value, sum_real_value]
@@ -313,12 +313,13 @@ class ProgressiveSampling(CardEst):
         else:
             valid_list = []
             value_list = []
+            results = []
             groupby_col = [self.table.ColumnIndex(n) for n in self.groupby_col]
             valid_list = self.generateValidList(columns, valid_i_list, 0, groupby_col, valid_list, value_list)
             num_samples = num_samples // len(valid_list)
             for valid_i_list, value in valid_list:
                 result = self.runModel(valid_i_list, operators, logits, ordering, columns, inp, select_col, num_samples, count)
-                if result is not None and result[1] > 0.5:
+                if result is not None:
                     results.append(value + result)
             return results
 
@@ -418,13 +419,14 @@ class ProgressiveSampling(CardEst):
             else:
                 probs_i = torch.softmax(
                     self.model.logits_for_col(natural_idx, logits), 1)
+                valid_i = valid_i_list[natural_idx]
+                if valid_i is not None:
+                    probs_i *= valid_i
         vals = torch.as_tensor(columns[select_col].all_distinct_values, device=self.device)
         mask = ~vals.isnan()
-        print(probs_i[0])
         probs_i = probs_i[:, mask]
         if self.shortcircuit and operators[select_col] is None:
             probs_i_summed = probs_i.sum(1)
-
             masked_probs.append(probs_i_summed)
         if len(masked_probs) == 1:
             p = masked_probs[0]
@@ -439,15 +441,12 @@ class ProgressiveSampling(CardEst):
             count_est_value = len(self.table.data) * p.mean().item()
             return count_est_value
         else:
-            #vals = torch.as_tensor(columns[select_col].all_distinct_values, device=self.device)
-            #mask = ~vals.isnan()
             vals = vals[mask]
-            #probs_i = probs_i[:, mask]
             prob_select = torch.div(probs_i, probs_i.sum(1).reshape(-1, 1))
             p_selects = prob_select.mean(dim=0)
+            # avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy().item()
             vals_idx = torch.from_numpy(np.arange(1, len(vals)+1)).float().to(self.device)
-            avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy().item()
-            print('average index', torch.dot(p_selects, vals_idx).cpu().detach().numpy().item())
+            avg_est_value = torch.dot(p_selects, vals_idx).cpu().detach().numpy().item()
             return avg_est_value
 
 

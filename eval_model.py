@@ -301,15 +301,15 @@ def GenerateRandomQuery(table):
         key_cols = [table.ColumnIndex('ss_sold_date_sk'), table.ColumnIndex('ss_store_sk')]
         for col in key_cols:
             select_cols.remove(col)
-    elif args.dataset == 'dmv.csv':
-        select_cols = [table.ColumnIndex('Model Year'), table.ColumnIndex('Weight_100')]
+    # elif args.dataset == 'dmv.csv':
+        # select_cols = [table.ColumnIndex('Model Year'), table.ColumnIndex('Weight_100')]
     agg_col = rng.choice(select_cols, size=1)[0]
     all_cols = [*range(ncol)]
     all_cols.remove(agg_col)
     nselect = len(all_cols)
     if nselect > 2:
-        p = [0.5, 0.3]
-        p.extend([0.2 / (nselect - 2)] * (nselect - 2))
+        p = [0.3, 0.3]
+        p.extend([0.4 / (nselect - 2)] * (nselect - 2))
     elif nselect == 2:
         p = [0.6, 0.4]
     else:
