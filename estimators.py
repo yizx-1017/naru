@@ -311,7 +311,6 @@ class ProgressiveSampling(CardEst):
                                    ordering, columns, inp, select_col, num_samples, count)
             return result
         else:
-            results = []
             valid_list = []
             value_list = []
             groupby_col = [self.table.ColumnIndex(n) for n in self.groupby_col]

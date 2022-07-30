@@ -152,7 +152,7 @@ parser.add_argument(
 
 # Save Result
 parser.add_argument(
-    '--save_result',
+    '--result_path',
     type=str,
     default='results/1G/query.json',
     help='Turn on to write results in results/'
@@ -349,10 +349,18 @@ def RunSingleQuery(est, est_avg, real, agg_col, where_col, where_ops, where_val,
     # Actual.
     real_result = real.Query(agg_col, where_col, where_ops, where_val, groupby_col)
 
-    est_result_avg = est_avg.Query(agg_col, where_col, where_ops, where_val, groupby_col, count=False)
-    est_result_count = est.Query(agg_col, where_col, where_ops, where_val, groupby_col, count=True)
-    est_result_sum = est_result_count*est_result_avg
-    est_result = [est_result_avg, est_result_count, est_result_sum]
+    if groupby_col is None:
+        est_result_avg = est_avg.Query(agg_col, where_col, where_ops, where_val, groupby_col, count=False)
+        est_result_count = est.Query(agg_col, where_col, where_ops, where_val, groupby_col, count=True)
+        est_result_sum = est_result_count*est_result_avg
+        est_result = [est_result_avg, est_result_count, est_result_sum]
+    else:
+        vals, est_avg = est_avg.Query(agg_col, where_col, where_ops, where_val, groupby_col, count=False)
+        vals, est_count = est.Query(agg_col, where_col, where_ops, where_val, groupby_col, count=True)
+        mask = est_count > 0.5
+        est_sum = est_avg[mask] * est_count[mask]
+        est_result = [vals[mask], est_avg[mask], est_count[mask], est_sum]
+
     return est_result, real_result
 
 
@@ -533,8 +541,8 @@ def ReportModel(model, blacklist=None):
             ps.append(np.prod(p.size()))
     num_params = sum(ps)
     mb = num_params * 4 / 1024 / 1024
-    # print('Number of model parameters: {} (~= {:.1f}MB)'.format(num_params, mb))
-    # print(model)
+    print('Number of model parameters: {} (~= {:.1f}MB)'.format(num_params, mb))
+    print(model)
     return mb
 
 
@@ -569,11 +577,11 @@ def LoadOracleCardinalities():
 
 def err(est, real):
     if real == 0:
-        return 'result=0!'
+        return 0
     return abs(est - real) / real
 
 
-def saveResults(est, real, est_result, real_result, query, order, filename):
+def saveResults(est_time, real, est_result, real_result, query, order, filename):
     if len(est_result) == 3 and est_result[0] is not list:
         result = {
             'timestamp': str(datetime.now()),
@@ -589,9 +597,9 @@ def saveResults(est, real, est_result, real_result, query, order, filename):
             'sum_est': est_result[2],
             'sum_real': real_result[2],
             'sum_err': err(est_result[2], real_result[2]),
-            'query_dur_ms_est': est.query_dur_ms[0],
+            'query_dur_ms_est': est_time,
             'query_dur_ms_real': real.query_dur_ms[0],
-            'query_dur_ms_err': err(est.query_dur_ms[0], real.query_dur_ms[0]),
+            'query_dur_ms_err': err(est_time, real.query_dur_ms[0]),
             'order': order,
             'groupby': False
         }
@@ -628,9 +636,9 @@ def saveResults(est, real, est_result, real_result, query, order, filename):
             'avg_err': np.mean(avg_error),
             'count_err': np.mean(cnt_error),
             'sum_err': np.mean(sum_error),
-            'query_dur_ms_est': est.query_dur_ms[0],
+            'query_dur_ms_est': est_time,
             'query_dur_ms_real': real.query_dur_ms[0],
-            'query_dur_ms_err': err(est.query_dur_ms[0], real.query_dur_ms[0]),
+            'query_dur_ms_err': err(est_time, real.query_dur_ms[0]),
             'order': order,
             'groupby': True
         })
@@ -788,8 +796,57 @@ def loadEstimators(table, order, natural_ordering):
         #          oracle_est=oracle_est)
     return estimators
 
+def RunSpecificQuery(table, real, agg_col, where_col, where_ops, where_val, groupby_col):
+    if args.order:
+        order = args.order
+    else:
+        order = generateOrder(table, agg_col, groupby_col)
+    querystr = toQuery(agg_col, where_col, where_ops, where_val, groupby_col)
+    where_col = [table.ColumnIndex(i) for i in where_col]
+    where_col = [table.columns[i] for i in where_col]
+    print(querystr)
+
+    estimators1 = loadEstimators(table, order, natural_ordering=True)[0]
+    estimators2 = loadEstimators(table, order, natural_ordering=False)[0]
+
+    est_result, real_result = RunSingleQuery(estimators1, estimators2, real, agg_col, where_col, where_ops, where_val,
+                                             groupby_col)
+    print(est_result, real_result)
+    if args.result_path is not None:
+        save_result = "results/" + args.result_path + "/query.json"
+        est_time = estimators1.query_dur_ms[0] + estimators2.query_dur_ms[0]
+        saveResults(est_time, real, est_result, real_result, querystr, order, save_result)
+        print('...Done, result:', save_result)
+
+def RunNRandomQuery(table, real, groupby_col):
+    for i in range(args.num_queries):
+        query = GenerateRandomQuery(table)
+        agg_col = query['agg_col']
+        where_col = query['where_col']
+        where_ops = query['where_ops']
+        where_val = query['where_val']
+        order = generateOrder(table, agg_col, groupby_col)
+        print(order)
+        querystr = toQuery(agg_col, [c.Name() for c in where_col],
+                           where_ops, where_val, groupby_col)
+        print(querystr)
+        estimators1 = loadEstimators(table, order, natural_ordering=True)[0]
+        estimators2 = loadEstimators(table, order, natural_ordering=False)[0]
+        est_result, real_result = RunSingleQuery(estimators1, estimators2, real, agg_col, where_col,
+                                                 where_ops, where_val, groupby_col)
+
+        if args.result_path is not None:
+            save_result = "results/" + args.result_path + "/query" + str(i) + '.json'
+            est_time = estimators1.query_dur_ms[0] + estimators2.query_dur_ms[0]
+            saveResults(est_time, real, est_result, real_result, querystr, order, save_result)
+            print('...Done, result:', save_result)
+
 
 def Main():
+    if args.groupby_col is not None:
+        groupby_col = ast.literal_eval(args.groupby_col)
+    else:
+        groupby_col = None
     if args.query:
         agg_col = args.agg_col
         if args.where_col is not None:
@@ -798,70 +855,16 @@ def Main():
             where_val = ast.literal_eval(args.where_val)
         else:
             where_col = where_ops = where_val = None
-        if args.groupby_col is not None:
-            groupby_col = ast.literal_eval(args.groupby_col)
-        else:
-            groupby_col = None
-        querystr = toQuery(agg_col, where_col, where_ops, where_val, groupby_col)
         if not args.run_bn:
             # OK to load tables now
             table, train_data, oracle_est, real = MakeTable()
-        if args.order:
-            order = args.order
-        else:
-            order = generateOrder(table, agg_col, groupby_col)
-        ncol=len(table.columns)
-        lst = [*range(ncol)]
-        print(lst)
-        lst.remove(table.ColumnIndex(agg_col))
-        orders = list(itertools.permutations(lst))
-        cnt = 0
+        RunSpecificQuery(table, real, agg_col, where_col, where_ops, where_val, groupby_col)
 
-        where_col = [table.ColumnIndex(i) for i in where_col]
-        where_col = [table.columns[i] for i in where_col]
-        for o in orders:
-            order = o + (table.ColumnIndex(agg_col),)
-            estimators1 = loadEstimators(table, order, natural_ordering=True)[0]
-            estimators2 = loadEstimators(table, order, natural_ordering=False)[0]
-            
-            logging.info('query ' + querystr)
-            est_result, real_result = RunSingleQuery(estimators1, estimators2, real, agg_col, where_col, where_ops, where_val,
-                                                     groupby_col)
-            print(est_result, real_result)
-            save_result = "results/test_point_density_4/query" + str(cnt) + '.json'
-            #saveResults(estimators1, real, est_result, real_result, querystr, order, save_result)
-            print('...Done, result:', save_result)
-            logging.info('write results in ' + save_result)
-            cnt += 1
     else:
         if not args.run_bn:
             # OK to load tables now
             table, train_data, oracle_est, real = MakeTable()
-        cnt = 0
-        for i in range(args.num_queries):
-            query = GenerateRandomQuery(table)
-            agg_col = query['agg_col']
-            where_col = query['where_col']
-            where_ops = query['where_ops']
-            where_val = query['where_val']
-            groupby_col = [None]
-            for g in groupby_col:
-                order = generateOrder(table, agg_col, g)
-                print(order)
-                querystr = toQuery(agg_col, [c.Name() for c in where_col],
-                                   where_ops, where_val, g)
-                print(querystr)
-                estimators1 = loadEstimators(table, order, natural_ordering=True)[0]
-                estimators2 = loadEstimators(table, order, natural_ordering=False)[0]
-                est_result, real_result = RunSingleQuery(estimators1, estimators2, real, agg_col, where_col,
-                                                             where_ops, where_val, g)
-
-                if args.save_result is not None:
-                    save_result = "results/" + args.dataset + "/query" + str(cnt) + '.json'
-                    saveResults(estimators1, real, est_result, real_result, querystr, order, save_result)
-                    print('...Done, result:', save_result)
-                    logging.info('write results in ' + save_result)
-                    cnt += 1
+        RunNRandomQuery(table, real, groupby_col)
 
     # SaveEstimators(args.err_csv, estimators)
     # print('...Done, result:', args.err_csv)
