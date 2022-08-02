@@ -163,9 +163,9 @@ class RealResult(CardEst):
             values = groupby_df.reset_index().values.tolist()
         else:
             # avg_real_value = df[self.agg_col].dropna().mean()
-            avg_real_value = df[self.agg_col].dropna().rank(method='dense').mean()
-            count_real_value = len(df[self.agg_col].dropna())
-            sum_real_value = df[self.agg_col].sum()
+            avg_real_value = df[self.agg_col].fillna(0).rank(method='dense').mean()
+            count_real_value = len(df[self.agg_col])
+            sum_real_value = avg_real_value * count_real_value
             values = [avg_real_value, count_real_value, sum_real_value]
         self.OnEnd()
         return values
@@ -422,9 +422,10 @@ class ProgressiveSampling(CardEst):
                 valid_i = valid_i_list[natural_idx]
                 if valid_i is not None:
                     probs_i *= valid_i
-        vals = torch.as_tensor(columns[select_col].all_distinct_values, device=self.device)
-        mask = ~vals.isnan()
-        probs_i = probs_i[:, mask]
+        #print(columns[select_col].all_distinct_values)
+        #vals = torch.as_tensor(columns[select_col].all_distinct_values, device=self.device)
+        #mask = ~vals.isnan()
+        #probs_i = probs_i[:, mask]
         if self.shortcircuit and operators[select_col] is None:
             probs_i_summed = probs_i.sum(1)
             masked_probs.append(probs_i_summed)
@@ -441,11 +442,14 @@ class ProgressiveSampling(CardEst):
             count_est_value = len(self.table.data) * p.mean().item()
             return count_est_value
         else:
-            vals = vals[mask]
+            #vals = vals[mask]
             prob_select = torch.div(probs_i, probs_i.sum(1).reshape(-1, 1))
             p_selects = prob_select.mean(dim=0)
             # avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy().item()
-            vals_idx = torch.from_numpy(np.arange(1, len(vals)+1)).float().to(self.device)
+            #if np.isnan(columns[select_col].all_distinct_values).any():
+            #    vals_idx = torch.from_numpy(np.arange(0, len(columns[select_col].all_distinct_values))).float().to(self.device)
+            #else:
+            vals_idx = torch.from_numpy(np.arange(1, len(columns[select_col].all_distinct_values)+1)).float().to(self.device)
             avg_est_value = torch.dot(p_selects, vals_idx).cpu().detach().numpy().item()
             return avg_est_value
 
