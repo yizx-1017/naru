@@ -581,7 +581,7 @@ def err(est, real):
     return abs(est - real) / real
 
 
-def saveResults(est_time, real, est_result, real_result, query, order, filename):
+def saveResults(est_time, real_time, est_result, real_result, query, order, filename):
     if len(est_result) == 3 and est_result[0] is not list:
         result = {
             'timestamp': str(datetime.now()),
@@ -598,8 +598,8 @@ def saveResults(est_time, real, est_result, real_result, query, order, filename)
             'sum_real': real_result[2],
             'sum_err': err(est_result[2], real_result[2]),
             'query_dur_ms_est': est_time,
-            'query_dur_ms_real': real.query_dur_ms[0],
-            'query_dur_ms_err': err(est_time, real.query_dur_ms[0]),
+            'query_dur_ms_real': real_time,
+            'query_dur_ms_err': err(est_time, real_time),
             'order': order,
             'groupby': False
         }
@@ -637,8 +637,8 @@ def saveResults(est_time, real, est_result, real_result, query, order, filename)
             'count_err': np.mean(cnt_error),
             'sum_err': np.mean(sum_error),
             'query_dur_ms_est': est_time,
-            'query_dur_ms_real': real.query_dur_ms[0],
-            'query_dur_ms_err': err(est_time, real.query_dur_ms[0]),
+            'query_dur_ms_real': real_time,
+            'query_dur_ms_err': err(est_time, real_time),
             'order': order,
             'groupby': True
         })
@@ -815,7 +815,7 @@ def RunSpecificQuery(table, real, agg_col, where_col, where_ops, where_val, grou
     if args.result_path is not None:
         save_result = "results/" + args.result_path + "/query.json"
         est_time = estimators1.query_dur_ms[0] + estimators2.query_dur_ms[0]
-        saveResults(est_time, real, est_result, real_result, querystr, order, save_result)
+        saveResults(est_time, real.query_dur_ms[0], est_result, real_result, querystr, order, save_result)
         print('...Done, result:', save_result)
 
 def RunNRandomQuery(table, real, groupby_col):
@@ -838,7 +838,8 @@ def RunNRandomQuery(table, real, groupby_col):
         if args.result_path is not None:
             save_result = "results/" + args.result_path + "/query" + str(i) + '.json'
             est_time = estimators1.query_dur_ms[0] + estimators2.query_dur_ms[0]
-            saveResults(est_time, real, est_result, real_result, querystr, order, save_result)
+            real_time = real.query_dur_ms[i]
+            saveResults(est_time, real_time, est_result, real_result, querystr, order, save_result)
             print('...Done, result:', save_result)
 
 
