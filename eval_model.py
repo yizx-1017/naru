@@ -301,8 +301,9 @@ def GenerateRandomQuery(table):
         key_cols = [table.ColumnIndex('ss_sold_date_sk'), table.ColumnIndex('ss_store_sk')]
         for col in key_cols:
             select_cols.remove(col)
-    # elif args.dataset == 'dmv.csv':
-        # select_cols = [table.ColumnIndex('Model Year'), table.ColumnIndex('Weight_100')]
+    elif args.dataset == 'dmv.csv' or args.dataset == 'dmv-original.csv':
+        select_cols.remove(3)
+        #select_cols = [table.ColumnIndex('Model Year'), table.ColumnIndex('Weight_100')]
     agg_col = rng.choice(select_cols, size=1)[0]
     all_cols = [*range(ncol)]
     all_cols.remove(agg_col)
