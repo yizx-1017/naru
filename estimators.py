@@ -141,7 +141,7 @@ class RealResult(CardEst):
         self.agg_col = agg_col
         self.OnStart()
         df = self.table.data
-        df['rank'] = df[self.agg_col].rank(method='dense')
+        #df['rank'] = df[self.agg_col].rank(method='dense')
         for i, col in enumerate(columns):
             ops = operators[i]
             col_name = col.name
@@ -163,7 +163,9 @@ class RealResult(CardEst):
             values = groupby_df.reset_index().values.tolist()
         else:
             # avg_real_value = df[self.agg_col].dropna().mean()
-            avg_real_value = df[self.agg_col].fillna(0).rank(method='dense').mean()
+            # avg_real_value = df[self.agg_col].rank(method='dense').mean()
+            avg_real_value = df[self.agg_col].replace({k:v+1 for v,k in enumerate(np.sort(self.table.data[self.agg_col].unique()))}).mean()
+            #print(df[self.agg_col].replace({k:v+1 for v,k in enumerate(np.sort(df[self.agg_col].unique()))}).count_values())
             count_real_value = len(df[self.agg_col])
             sum_real_value = avg_real_value * count_real_value
             values = [avg_real_value, count_real_value, sum_real_value]
@@ -443,13 +445,16 @@ class ProgressiveSampling(CardEst):
             return count_est_value
         else:
             #vals = vals[mask]
-            prob_select = torch.div(probs_i, probs_i.sum(1).reshape(-1, 1))
-            p_selects = prob_select.mean(dim=0)
+            #prob_select = torch.div(probs_i, probs_i.sum(1).reshape(-1, 1))
+            p_selects = probs_i.mean(dim=0)
             # avg_est_value = torch.dot(p_selects, vals.float()).cpu().detach().numpy().item()
             #if np.isnan(columns[select_col].all_distinct_values).any():
             #    vals_idx = torch.from_numpy(np.arange(0, len(columns[select_col].all_distinct_values))).float().to(self.device)
             #else:
             vals_idx = torch.from_numpy(np.arange(1, len(columns[select_col].all_distinct_values)+1)).float().to(self.device)
+            print(columns[select_col].all_distinct_values)
+            print(vals_idx)
+            print(p_selects)
             avg_est_value = torch.dot(p_selects, vals_idx).cpu().detach().numpy().item()
             return avg_est_value
 
