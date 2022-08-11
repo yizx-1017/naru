@@ -452,9 +452,9 @@ class ProgressiveSampling(CardEst):
             #    vals_idx = torch.from_numpy(np.arange(0, len(columns[select_col].all_distinct_values))).float().to(self.device)
             #else:
             vals_idx = torch.from_numpy(np.arange(1, len(columns[select_col].all_distinct_values)+1)).float().to(self.device)
-            print(columns[select_col].all_distinct_values)
-            print(vals_idx)
-            print(p_selects)
+            #print(columns[select_col].all_distinct_values)
+            #print(vals_idx)
+            #print(p_selects)
             avg_est_value = torch.dot(p_selects, vals_idx).cpu().detach().numpy().item()
             return avg_est_value
 
