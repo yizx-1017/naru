@@ -159,6 +159,7 @@ class RealResult(CardEst):
                         df = df[df[col_name] == vals[i][j]]
 
         if self.groupby_col is not None:
+            print(self.groupby_col)
             groupby_df = df.groupby(self.groupby_col)[self.agg_col].agg(['mean', 'count', 'sum'])
             values = groupby_df.reset_index().values.tolist()
         else:

@@ -293,7 +293,7 @@ def ReportEsts(estimators):
     return v
 
 
-def GenerateRandomQuery(table):
+def GenerateRandomQuery(table, groupby_cols):
     rng = np.random.RandomState()
     ncol = len(args.col)
     select_cols = [*range(ncol)]
@@ -303,11 +303,18 @@ def GenerateRandomQuery(table):
             select_cols.remove(col)
     elif args.dataset == 'dmv.csv' or args.dataset == 'dmv-original.csv':
         select_cols.remove(3)
+    if groupby_cols is not None:
+        for col in groupby_cols:
+            select_cols.remove(col)
         #select_cols = [table.ColumnIndex('Model Year'), table.ColumnIndex('Weight_100')]
     agg_col = rng.choice(select_cols, size=1)[0]
     all_cols = [*range(ncol)]
     all_cols.remove(agg_col)
     nselect = len(all_cols)
+    if groupby_cols is not None:
+        nselect = nselect - len(groupby_cols)
+        for col in groupby_cols:
+            all_cols.remove(col)
     if nselect > 2:
         p = [0.3, 0.3]
         p.extend([0.4 / (nselect - 2)] * (nselect - 2))
@@ -821,7 +828,7 @@ def RunSpecificQuery(table, real, agg_col, where_col, where_ops, where_val, grou
 
 def RunNRandomQuery(table, real, groupby_col):
     for i in range(args.num_queries):
-        query = GenerateRandomQuery(table)
+        query = GenerateRandomQuery(table, groupby_col)
         agg_col = query['agg_col']
         where_col = query['where_col']
         where_ops = query['where_ops']
