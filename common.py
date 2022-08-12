@@ -186,7 +186,7 @@ class CsvTable(Table):
     def _load(self, filename, cols, **kwargs):
         print('Loading csv...', end=' ')
         s = time.time()
-        df = pd.read_csv(filename, sep='|', usecols=cols, **kwargs)
+        df = pd.read_csv(filename, sep=',', usecols=cols, **kwargs)
         if cols is not None:
             df = df[cols]
         print('done, took {:.1f}s'.format(time.time() - s))
