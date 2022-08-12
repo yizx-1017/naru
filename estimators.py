@@ -316,14 +316,16 @@ class ProgressiveSampling(CardEst):
             valid_list = []
             value_list = []
             results = []
+            values = []
             groupby_col = [self.table.ColumnIndex(n) for n in self.groupby_col]
             valid_list = self.generateValidList(columns, valid_i_list, 0, groupby_col, valid_list, value_list)
             num_samples = num_samples // len(valid_list)
             for valid_i_list, value in valid_list:
                 result = self.runModel(valid_i_list, operators, logits, ordering, columns, inp, select_col, num_samples, count)
                 if result is not None:
-                    results.append(value + result)
-            return results
+                    results.append(result)
+                    values.append(value)
+            return values, results
 
     def generateValidList(self, columns, valid_i_list, i, groupby_col, valid_list, value_list):
         if i < len(groupby_col):
